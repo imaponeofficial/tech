@@ -1,0 +1,1502 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Web 3D Builder - Versão Otimizada (Instancing & Undo)</title>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/exporters/GLTFExporter.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/TransformControls.js"></script>
+    
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+    
+    <style>
+        /* --- ESTILO GERAL E RESET --- */
+        * { box-sizing: border-box; user-select: none; -webkit-user-select: none; }
+        body { margin: 0; overflow: hidden; background-color: #1b1b1b; color: #ddd; font-family: 'Segoe UI', sans-serif; width: 100vw; height: 100vh; }
+        
+        /* ONDE O 3D ACONTECE */
+        #viewport { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; background: #202020; transition: background 0.3s; }
+        
+        /* --- BOTÃO MENU HAMBÚRGUER --- */
+        #menu-toggle {
+            position: absolute; top: 15px; left: 15px; z-index: 10;
+            background: #D4AF37; color: #000; border: none;
+            width: 45px; height: 45px; border-radius: 8px; cursor: pointer;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center;
+            transition: transform 0.2s;
+        }
+        #menu-toggle:active { transform: scale(0.95); }
+
+        /* --- BARRA LATERAL (SIDEBAR) --- */
+        #sidebar {
+            position: absolute; top: 0; left: 0; bottom: 0; width: 320px;
+            background: rgba(35, 35, 35, 0.98); border-right: 1px solid #555; z-index: 9;
+            display: flex; flex-direction: column; 
+            transition: transform 0.3s cubic-bezier(0.25, 1, 0.5, 1);
+            transform: translateX(0); /* Aberto por padrão */
+            box-shadow: 5px 0 15px rgba(0,0,0,0.5);
+        }
+        
+        #sidebar.closed { transform: translateX(-110%); }
+        .sidebar-spacer { height: 70px; } 
+
+        .panel-header { padding: 20px; background: #2a2a2a; border-bottom: 1px solid #444; font-weight: bold; color: #D4AF37; display: flex; align-items: center; gap: 10px; font-size: 1.1rem; }
+        .panel-content { flex: 1; overflow-y: auto; padding: 15px; }
+        
+        /* --- BOTÕES E ELEMENTOS --- */
+        .section-title { font-size: 0.75rem; color: #888; margin: 20px 0 10px 0; text-transform: uppercase; font-weight: bold; letter-spacing: 1px; }
+        
+        .btn {
+            background: #444; color: #fff; border: 1px solid #555; padding: 12px; width: 100%;
+            margin-bottom: 8px; cursor: pointer; border-radius: 6px; text-align: left;
+            display: flex; align-items: center; transition: 0.2s; font-size: 0.9rem;
+        }
+        .btn:hover { background: #555; border-color: #777; }
+        .btn:active { background: #333; }
+        
+        .btn.primary { background: #D4AF37; color: #000; font-weight: bold; justify-content: center; margin-top: 10px; border: none; }
+        .btn.primary:hover { background: #e5c14f; }
+
+        /* GRID DE AMBIENTE */
+        .env-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 5px; margin-bottom: 15px; }
+        .env-btn {
+            background: #333; border: 1px solid #444; color: #ccc; padding: 8px; font-size: 0.75rem;
+            cursor: pointer; border-radius: 4px; text-align: center;
+        }
+        .env-btn:hover { background: #444; }
+        .env-btn.active { background: #D4AF37; color: #000; font-weight: bold; border-color: #D4AF37; }
+
+        /* GRID DE PRIMITIVAS */
+        .primitives-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+        .btn-prim { 
+            flex-direction: column; justify-content: center; align-items: center; text-align: center; padding: 15px;
+            background: #333;
+        }
+        .btn-prim span.material-icons { font-size: 28px; margin-bottom: 5px; color: #D4AF37; }
+        .btn-prim:hover { background: #444; }
+
+        /* LISTA DE ASSETS */
+        .asset-item {
+            display: flex; align-items: center; justify-content: space-between;
+            background: #252525; padding: 8px; margin-bottom: 5px; border-radius: 4px; border: 1px solid #444; 
+        }
+        .asset-item:hover { border-color: #D4AF37; }
+        .asset-clickable { display: flex; align-items: center; cursor: pointer; flex: 1; overflow: hidden; padding: 5px; }
+        .asset-item span.text { margin-left: 10px; font-size: 0.85rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .asset-icon { color: #D4AF37; }
+        .btn-delete-asset {
+            background: transparent; border: none; color: #ff5555; cursor: pointer; padding: 8px;
+            display: flex; align-items: center; justify-content: center; transition: 0.2s;
+        }
+        .btn-delete-asset:hover { background: rgba(255, 0, 0, 0.2); border-radius: 4px; }
+
+        /* PAINEL DE PROPRIEDADES */
+        .props-panel { background: #2a2a2a; padding: 10px; border-radius: 6px; margin-bottom: 15px; border: 1px solid #444; }
+        .prop-row { display: flex; align-items: center; margin-bottom: 8px; }
+        .prop-label { width: 70px; font-size: 0.8rem; color: #ccc; }
+        .prop-inputs { display: flex; gap: 5px; flex: 1; }
+        .prop-input { 
+            width: 100%; background: #111; border: 1px solid #444; color: #fff; 
+            padding: 6px; border-radius: 4px; font-size: 0.85rem; text-align: center;
+        }
+        .prop-input:focus { border-color: #D4AF37; outline: none; }
+        
+        /* ESTILO PARA INPUT DE ALTURA */
+        .height-control { border: 1px solid #D4AF37; background: #2a2200; }
+
+        /* --- TEXTURAS --- */
+        .texture-category { margin-bottom: 15px; }
+        .tex-cat-title { font-size: 0.8rem; color: #aaa; margin-bottom: 5px; border-left: 2px solid #D4AF37; padding-left: 8px; }
+        .texture-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+        .tex-btn {
+            width: 100%; padding-bottom: 80%;
+            position: relative; border-radius: 6px; border: 2px solid #444; cursor: pointer;
+            background-size: cover; background-position: center; transition: 0.2s; background-color: #000;
+        }
+        .tex-btn:hover { border-color: #fff; transform: scale(1.05); }
+        .tex-btn.active { border-color: #D4AF37; box-shadow: 0 0 8px rgba(212, 175, 55, 0.5); }
+        .tex-btn:hover::after {
+            content: attr(data-label);
+            position: absolute; bottom: 0; left: 0; right: 0;
+            background: rgba(0,0,0,0.8); color: white; font-size: 0.65rem; padding: 2px;
+            text-align: center; white-space: nowrap; overflow: hidden;
+            border-bottom-left-radius: 4px; border-bottom-right-radius: 4px;
+        }
+
+        /* --- TOOLBAR SUPERIOR --- */
+        #toolbar {
+            position: absolute; top: 15px; left: 50%; transform: translateX(-50%);
+            height: 60px; background: rgba(35, 35, 35, 0.95); border-radius: 12px; z-index: 8;
+            display: flex; align-items: center; padding: 0 15px; gap: 8px;
+            box-shadow: 0 8px 20px rgba(0,0,0,0.6); backdrop-filter: blur(5px);
+            border: 1px solid #555;
+            max-width: 95vw; overflow-x: auto;
+        }
+        
+        .tool-btn {
+            background: transparent; border: 1px solid transparent; color: #ccc;
+            width: 40px; height: 40px; border-radius: 8px; cursor: pointer; 
+            display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+            transition: 0.2s; position: relative;
+        }
+        .tool-btn:hover { background: #555; color: white; }
+        .tool-btn.active { background: #D4AF37; color: #000; box-shadow: 0 0 10px rgba(212, 175, 55, 0.4); }
+        .tool-btn.danger.active { background: #ff4444; color: white; box-shadow: 0 0 10px rgba(255, 68, 68, 0.4); }
+        .tool-btn.magic.active { background: #9c27b0; color: white; box-shadow: 0 0 10px rgba(156, 39, 176, 0.5); }
+        .tool-btn.locked-active { background: #4CAF50; color: white; } 
+        
+        /* Estilos especiais para o botão de travar */
+        .tool-btn.lock-btn:hover { color: #f39c12; }
+        .tool-btn.unlock-btn:hover { color: #2ecc71; }
+
+        .divider { width: 1px; height: 30px; background: #555; margin: 0 8px; }
+        
+        input[type="file"] { display: none; }
+
+        /* Notificações */
+        #status {
+            position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%); z-index: 20;
+            background: rgba(0,0,0,0.8); color: #fff; padding: 12px 25px; border-radius: 30px;
+            display: none; box-shadow: 0 4px 15px rgba(0,0,0,0.5); border: 1px solid #444;
+            font-size: 0.95rem; pointer-events: none;
+        }
+
+        /* Loading Overlay (Novo) */
+        #loading-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.85); z-index: 9999;
+            display: none; align-items: center; justify-content: center; flex-direction: column;
+        }
+        .loading-spinner {
+            border: 5px solid #333; border-top: 5px solid #D4AF37;
+            border-radius: 50%; width: 50px; height: 50px;
+            animation: spin 1s linear infinite; margin-bottom: 20px;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .loading-text { color: #D4AF37; font-size: 1.2rem; font-weight: bold; letter-spacing: 1px; }
+
+        /* --- BOTÃO FLUTUANTE DE CONFIRMAÇÃO --- */
+        #btn-confirm-creation {
+            position: absolute; bottom: 100px; left: 50%; transform: translateX(-50%); z-index: 25;
+            background: #27ae60; color: white; border: none; padding: 15px 30px;
+            border-radius: 50px; font-weight: bold; font-size: 1rem; cursor: pointer;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.5); display: none; /* Oculto por padrão */
+            animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            display: none; align-items: center; gap: 10px;
+        }
+        #btn-confirm-creation:hover { background: #2ecc71; transform: translateX(-50%) scale(1.05); }
+
+        @keyframes popIn {
+            from { opacity: 0; transform: translateX(-50%) scale(0.5); }
+            to { opacity: 1; transform: translateX(-50%) scale(1); }
+        }
+
+        hr { border: 0; border-top: 1px solid #444; margin: 15px 0; }
+        
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #222; }
+        ::-webkit-scrollbar-thumb { background: #555; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #777; }
+    </style>
+</head>
+<body>
+
+    <div id="loading-overlay">
+        <div class="loading-spinner"></div>
+        <div class="loading-text" id="loading-msg">PROCESSANDO...</div>
+    </div>
+
+    <button id="menu-toggle" onclick="toggleSidebar()">
+        <span class="material-icons">menu</span>
+    </button>
+
+    <div id="sidebar">
+        <div class="sidebar-spacer"></div>
+        <div class="panel-header">
+            <span class="material-icons">apartment</span> EDITOR 3D PRO
+        </div>
+        
+        <div class="panel-content">
+
+            <div class="section-title">Ambiente / Mapa</div>
+            <div class="env-grid">
+                <div class="env-btn active" id="env-default" onclick="setEnvironment('default')">Padrão</div>
+                <div class="env-btn" id="env-light" onclick="setEnvironment('light')">Mapa Claro</div>
+                <div class="env-btn" id="env-sat" onclick="setEnvironment('satellite')">Satélite</div>
+            </div>
+
+            <div id="properties-container" style="display:none;">
+                <div class="section-title">Propriedades</div>
+                <div class="props-panel">
+                    
+                    <div class="prop-row" id="row-extrusion" style="display:none;">
+                        <span class="prop-label" style="color:#D4AF37; font-weight:bold;">Altura</span>
+                        <div class="prop-inputs">
+                            <input type="number" step="0.1" min="0.01" class="prop-input height-control" id="inp-extrusion" onchange="updateExtrusionHeight()" placeholder="Altura (m)">
+                        </div>
+                    </div>
+
+                    <div class="prop-row">
+                        <span class="prop-label">Escala</span>
+                        <div class="prop-inputs">
+                            <input type="number" step="0.1" class="prop-input" id="inp-sx" onchange="updateTransform('scale')" placeholder="X">
+                            <input type="number" step="0.1" class="prop-input" id="inp-sy" onchange="updateTransform('scale')" placeholder="Y">
+                            <input type="number" step="0.1" class="prop-input" id="inp-sz" onchange="updateTransform('scale')" placeholder="Z">
+                        </div>
+                    </div>
+                     <div class="prop-row">
+                        <span class="prop-label">Posição</span>
+                        <div class="prop-inputs">
+                            <input type="number" step="0.5" class="prop-input" id="inp-px" onchange="updateTransform('pos')" placeholder="X">
+                            <input type="number" step="0.5" class="prop-input" id="inp-py" onchange="updateTransform('pos')" placeholder="Y">
+                            <input type="number" step="0.5" class="prop-input" id="inp-pz" onchange="updateTransform('pos')" placeholder="Z">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="section-title">Materiais & Texturas (Realistas)</div>
+                <div id="texture-panel" class="props-panel">
+                    </div>
+                <hr>
+            </div>
+
+            <div class="section-title">Adicionar Primitivas</div>
+            <div class="primitives-grid">
+                <button class="btn btn-prim" onclick="addPrimitive('cube')">
+                    <span class="material-icons">check_box_outline_blank</span> Cubo
+                </button>
+                <button class="btn btn-prim" onclick="addPrimitive('sphere')">
+                    <span class="material-icons">circle</span> Esfera
+                </button>
+                <button class="btn btn-prim" onclick="addPrimitive('cylinder')">
+                    <span class="material-icons">data_usage</span> Cilindro
+                </button>
+                <button class="btn btn-prim" onclick="addPrimitive('plane')">
+                    <span class="material-icons">crop_square</span> Área/Chão
+                </button>
+            </div>
+
+            <hr>
+
+            <div class="section-title">Importar Arquivos</div>
+            
+            <button class="btn" onclick="triggerFile('fileReference')">
+                <span class="material-icons" style="margin-right:10px; color:#D4AF37;">map</span> Gabarito (GeoJSON)
+            </button>
+            <input type="file" id="fileReference" accept="*" onchange="handleFileSelect(this, 'ref')">
+            
+            <button class="btn" onclick="triggerFile('fileModel')">
+                <span class="material-icons" style="margin-right:10px; color:#D4AF37;">library_add</span> Modelo 3D (.glb)
+            </button>
+            <input type="file" id="fileModel" accept=".glb,.gltf" onchange="handleFileSelect(this, 'model')">
+
+            <div class="section-title">Biblioteca da Cena</div>
+            <div id="assetLibrary">
+                <div style="text-align:center; color:#666; font-size:0.8rem; padding:10px;">Nenhum modelo importado</div>
+            </div>
+        </div>
+        
+        <div style="padding: 15px; border-top: 1px solid #444; background: #252525;">
+            <button class="btn primary" onclick="exportScene()">
+                <span class="material-icons" style="margin-right:8px">save_alt</span> EXPORTAR PROJETO
+            </button>
+        </div>
+    </div>
+
+    <div id="toolbar">
+        <button class="tool-btn" id="tool-undo" title="Desfazer (Ctrl+Z)" onclick="undo()">
+            <span class="material-icons">undo</span>
+        </button>
+        <button class="tool-btn" id="tool-redo" title="Refazer (Ctrl+Y)" onclick="redo()">
+            <span class="material-icons">redo</span>
+        </button>
+
+        <div class="divider"></div>
+        
+        <button class="tool-btn lock-btn" title="Travar Seleção (Impede Seleção)" onclick="lockSelectedObject()">
+            <span class="material-icons">lock</span>
+        </button>
+        <button class="tool-btn unlock-btn" title="Destravar Tudo (Libera Edição)" onclick="unlockAllObjects()">
+            <span class="material-icons">lock_open</span>
+        </button>
+        
+        <div class="divider"></div>
+
+        <button class="tool-btn active" id="tool-translate" title="Mover (G)" onclick="setMode('translate')">
+            <span class="material-icons">open_with</span>
+        </button>
+        <button class="tool-btn" id="tool-rotate" title="Rotacionar Livre (R)" onclick="setMode('rotate')">
+            <span class="material-icons">rotate_left</span>
+        </button>
+        
+        <button class="tool-btn" id="tool-rotate-y" title="Rotacionar no Chão (Eixo Y)" onclick="setMode('rotate-y')">
+            <span class="material-icons">360</span>
+        </button>
+
+        <button class="tool-btn" id="tool-scale" title="Escalar (S)" onclick="setMode('scale')">
+            <span class="material-icons">aspect_ratio</span>
+        </button>
+        
+        <div class="divider"></div>
+
+        <button class="tool-btn" id="tool-center" title="Centralizar Objeto" onclick="centerSelectedObject()">
+            <span class="material-icons">filter_center_focus</span>
+        </button>
+
+        <div class="divider"></div>
+
+        <button class="tool-btn magic" id="tool-magic" title="Selecionar Área do GeoJSON (Criar Chão/Extrusão)" onclick="toggleMagicMode()">
+            <span class="material-icons">auto_fix_high</span>
+        </button>
+
+        <button class="tool-btn" id="tool-deep-select" title="Modo Edição Interna (Mover partes)" onclick="toggleDeepSelect()">
+            <span class="material-icons">layers</span>
+        </button>
+
+        <div class="divider"></div>
+
+        <button class="tool-btn" id="tool-lock-y" title="Travar Movimento no Chão" onclick="toggleLockY()">
+            <span class="material-icons">vertical_align_bottom</span>
+        </button>
+        
+        <div class="divider"></div>
+        
+        <button class="tool-btn" title="Duplicar (Ctrl+D)" onclick="duplicateSelected()">
+            <span class="material-icons">content_copy</span>
+        </button>
+        <button class="tool-btn" title="Deletar (Del)" onclick="deleteSelected()">
+            <span class="material-icons" style="color: #ff5555">delete</span>
+        </button>
+    </div>
+
+    <button id="btn-confirm-creation" onclick="confirmCreation()">
+        <span class="material-icons">check_circle</span> CONFIRMAR CRIAÇÃO
+    </button>
+
+    <div id="viewport"></div>
+    <div id="status">Pronto</div>
+
+    <script>
+        // --- Variáveis Globais ---
+        let scene, camera, renderer, orbit, transformControl;
+        let objectsGroup, mapPlane;
+        let geoJsonGhostGroup; 
+        let gridHelper;
+        let raycaster = new THREE.Raycaster();
+        let mouse = new THREE.Vector2();
+        let loadedAssets = {}; 
+        let selectedObject = null;
+        let lockY = false; 
+        let deepSelectMode = false;
+        let magicMode = false;
+
+        // Variáveis para o sistema de Preview/Confirmação
+        let previewMesh = null; 
+        let pendingGhost = null; 
+
+        // SISTEMA DE UNDO/REDO
+        let historyStack = [];
+        let historyStep = -1;
+        const MAX_HISTORY = 20; // Limite para não pesar a memória
+        
+        init();
+        initTextureSystem();
+        animate();
+
+        function init() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x202020);
+            
+            gridHelper = new THREE.GridHelper(50000, 500, 0x555555, 0x333333);
+            scene.add(gridHelper);
+
+            const mapGeo = new THREE.PlaneGeometry(50000, 50000);
+            const mapMat = new THREE.MeshBasicMaterial({ color: 0x222222, visible: false });
+            mapPlane = new THREE.Mesh(mapGeo, mapMat);
+            mapPlane.rotation.x = -Math.PI / 2;
+            mapPlane.position.y = -0.1; 
+            scene.add(mapPlane);
+
+            objectsGroup = new THREE.Group();
+            scene.add(objectsGroup); 
+
+            // Grupo para "Fantasmas" (Raycasting)
+            geoJsonGhostGroup = new THREE.Group();
+            geoJsonGhostGroup.visible = false; 
+            scene.add(geoJsonGhostGroup);
+
+            camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 80000);
+            camera.position.set(30, 30, 30);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            renderer.outputEncoding = THREE.sRGBEncoding;
+            renderer.physicallyCorrectLights = true;
+            document.getElementById('viewport').appendChild(renderer.domElement);
+
+            const ambientLight = new THREE.AmbientLight(0xffffff, 1.5);
+            scene.add(ambientLight);
+            
+            const dirLight = new THREE.DirectionalLight(0xffffff, 2.5);
+            dirLight.position.set(50, 100, 50);
+            dirLight.castShadow = true;
+            dirLight.shadow.mapSize.width = 2048;
+            dirLight.shadow.mapSize.height = 2048;
+            dirLight.shadow.camera.left = -500;
+            dirLight.shadow.camera.right = 500;
+            dirLight.shadow.camera.top = 500;
+            dirLight.shadow.camera.bottom = -500;
+            scene.add(dirLight);
+
+            orbit = new THREE.OrbitControls(camera, renderer.domElement);
+            orbit.dampingFactor = 0.1;
+            orbit.enableDamping = true;
+
+            transformControl = new THREE.TransformControls(camera, renderer.domElement);
+            transformControl.addEventListener('dragging-changed', (event) => {
+                orbit.enabled = !event.value;
+                // Salvar histórico quando terminar de arrastar
+                if (event.value === false) {
+                    saveHistory();
+                }
+            });
+            transformControl.addEventListener('change', () => {
+                if(selectedObject) {
+                    updateUIValues();
+                }
+            });
+            scene.add(transformControl);
+
+            window.addEventListener('resize', onWindowResize);
+            renderer.domElement.addEventListener('pointerdown', onPointerDown);
+            window.addEventListener('keydown', onKeyDown);
+            
+            // Salvar estado inicial
+            saveHistory();
+        }
+
+        // --- SISTEMA DE UNDO / REDO ---
+        function saveHistory() {
+            // Remove estados futuros se estivermos no meio do histórico
+            if (historyStep < historyStack.length - 1) {
+                historyStack = historyStack.slice(0, historyStep + 1);
+            }
+            
+            // Salva JSON do grupo de objetos
+            const json = objectsGroup.toJSON();
+            historyStack.push(JSON.stringify(json));
+            
+            if (historyStack.length > MAX_HISTORY) {
+                historyStack.shift();
+            } else {
+                historyStep++;
+            }
+            updateUndoRedoUI();
+        }
+
+        function undo() {
+            if (historyStep > 0) {
+                historyStep--;
+                restoreHistoryState(historyStack[historyStep]);
+                showStatus("Desfazer realizado");
+            }
+            updateUndoRedoUI();
+        }
+
+        function redo() {
+            if (historyStep < historyStack.length - 1) {
+                historyStep++;
+                restoreHistoryState(historyStack[historyStep]);
+                showStatus("Refazer realizado");
+            }
+            updateUndoRedoUI();
+        }
+
+        function restoreHistoryState(jsonString) {
+            deselect();
+            // Remove objetos atuais
+            while(objectsGroup.children.length > 0){ 
+                objectsGroup.remove(objectsGroup.children[0]); 
+            }
+            
+            // Carrega estado
+            const loader = new THREE.ObjectLoader();
+            loader.parse(JSON.parse(jsonString), function (obj) {
+                // Preserva o objectsGroup original mas preenche com os filhos do carregado
+                while(obj.children.length > 0) {
+                    const child = obj.children[0];
+                    obj.remove(child);
+                    // Restaura sombras e userData se perder
+                    child.traverse(c => {
+                        if(c.isMesh) { c.castShadow = true; c.receiveShadow = true; }
+                    });
+                    objectsGroup.add(child);
+                }
+            });
+            
+            // Atualiza a biblioteca lateral se sumiu algo
+            document.getElementById('assetLibrary').innerHTML = '<div style="text-align:center; color:#666; font-size:0.8rem; padding:10px;">Nenhum modelo importado</div>';
+            // Recriar lista (simplificado: limpa e recria baseado no que está na cena)
+            objectsGroup.children.forEach(c => {
+                if (c.userData.listID) { // É um asset importado ou mapa
+                   // Recriar botão na UI se necessário, mas para simplificar o undo/redo visual,
+                   // vamos focar que o objeto 3D volta. O botão da lista pode se perder visualmente se não formos complexos,
+                   // mas o objeto está lá.
+                }
+            });
+        }
+
+        function updateUndoRedoUI() {
+            document.getElementById('tool-undo').style.opacity = historyStep > 0 ? '1' : '0.3';
+            document.getElementById('tool-redo').style.opacity = historyStep < historyStack.length - 1 ? '1' : '0.3';
+        }
+
+        // --- Sistema de Texturas Realistas (Atualizado para Repositório Unificado) ---
+        function initTextureSystem() {
+            // URL base fornecida
+            const baseUrl = "https://imaponeofficial.github.io/textura/";
+            // Quantidade de texturas
+            const totalTextures = 21;
+
+            const panel = document.getElementById('texture-panel');
+            
+            // Criando container da categoria única
+            const catDiv = document.createElement('div');
+            catDiv.className = 'texture-category';
+            catDiv.innerHTML = `<div class="tex-cat-title">Minhas Texturas</div>`;
+            
+            const grid = document.createElement('div');
+            grid.className = 'texture-grid';
+            
+            // Loop de 1 até 21
+            for (let i = 1; i <= totalTextures; i++) {
+                const url = `${baseUrl}${i}.jpg`;
+                
+                const btn = document.createElement('div');
+                btn.className = 'tex-btn';
+                btn.setAttribute('data-label', `Textura ${i}`);
+                btn.style.backgroundImage = `url('${url}')`;
+                btn.onclick = () => applyTextureToSelection(url);
+                grid.appendChild(btn);
+            }
+
+            catDiv.appendChild(grid);
+            panel.appendChild(catDiv);
+        }
+
+        // --- CACHE DE TEXTURAS E MATERIAIS (INSTANCING FIX) ---
+        // Agora cacheamos o MATERIAL inteiro. Se 100 objetos usam a textura X,
+        // todos usarão a mesma instância de material.
+        const sharedMaterials = {}; 
+
+        function applyTextureToSelection(url) {
+            if(!selectedObject) return;
+            
+            showStatus("Aplicando textura...");
+
+            // 1. Correção de UV: Agora mapeia baseado no tamanho REAL do mundo (World Space)
+            // Isso permite que o material tenha repeat (1,1) e a geometria se ajuste.
+            automapUVs(selectedObject, true); 
+
+            // 2. Verifica se já existe um material para essa textura
+            if (sharedMaterials[url]) {
+                console.log("Usando Material Compartilhado (Instância existente).");
+                selectedObject.traverse((node) => {
+                    if (node.isMesh) {
+                        node.material = sharedMaterials[url];
+                        node.material.needsUpdate = true;
+                    }
+                });
+                showStatus("Textura aplicada (Otimizada)!");
+                saveHistory();
+                return;
+            }
+
+            // 3. Se não existe, cria um novo e salva no cache
+            console.log("Criando novo Material Compartilhado...");
+            const loader = new THREE.TextureLoader();
+            loader.setCrossOrigin('anonymous');
+
+            loader.load(url, function(texture) {
+                texture.wrapS = THREE.RepeatWrapping;
+                texture.wrapT = THREE.RepeatWrapping;
+                texture.encoding = THREE.sRGBEncoding;
+                
+                // IMPORTANTE: Repeat fica 1,1. O controle de escala é feito no UV do objeto.
+                // Isso garante que o GLTFExporter salve apenas 1 textura.
+                texture.repeat.set(1, 1); 
+
+                const newMat = new THREE.MeshStandardMaterial({
+                    map: texture,
+                    color: 0xffffff,
+                    roughness: 1,
+                    metalness: 0
+                });
+
+                sharedMaterials[url] = newMat; // Salva no cache
+
+                selectedObject.traverse((node) => {
+                    if (node.isMesh) {
+                        node.material = newMat;
+                        node.material.needsUpdate = true;
+                    }
+                });
+                showStatus("Textura aplicada!");
+                saveHistory();
+            }, undefined, function(err) {
+                console.error("Erro textura", err);
+                showStatus("Erro ao carregar imagem.");
+            });
+        }
+
+        // --- FUNÇÃO DE CORREÇÃO DE UV (MODIFICADA PARA INSTANCING) ---
+        // useWorldScale: se true, calcula UVs baseados em metros (1.0 UV = 1.0 metro)
+        function automapUVs(object, useWorldScale = false) {
+            object.traverse((mesh) => {
+                if (mesh.isMesh && mesh.geometry) {
+                    mesh.geometry.computeVertexNormals();
+                    mesh.geometry.computeBoundingBox();
+                    
+                    const bbox = mesh.geometry.boundingBox;
+                    const size = new THREE.Vector3();
+                    bbox.getSize(size);
+                    const min = bbox.min;
+
+                    const posAttribute = mesh.geometry.attributes.position;
+                    const normAttribute = mesh.geometry.attributes.normal;
+                    
+                    const count = posAttribute.count;
+                    const uvs = new Float32Array(count * 2);
+
+                    // Escala da textura (densidade)
+                    // Se useWorldScale é true, dividimos por 1 (1 repetição por metro).
+                    // Se quiser texturas mais densas, diminua esse valor (ex: 0.5).
+                    const scaleFactor = useWorldScale ? 2.0 : 1.0; 
+
+                    for (let i = 0; i < count; i++) {
+                        const x = posAttribute.getX(i);
+                        const y = posAttribute.getY(i);
+                        const z = posAttribute.getZ(i);
+
+                        let nx = 0, ny = 1, nz = 0;
+                        if(normAttribute) {
+                            nx = normAttribute.getX(i);
+                            ny = normAttribute.getY(i);
+                            nz = normAttribute.getZ(i);
+                        }
+
+                        let u, v;
+
+                        // Se a normal aponta para Cima/Baixo (Y)
+                        if (Math.abs(ny) > Math.abs(nx) && Math.abs(ny) > Math.abs(nz)) {
+                            // Se for World Scale, não dividimos pelo size total, apenas deslocamos
+                            if (useWorldScale) {
+                                u = (x - min.x) / scaleFactor;
+                                v = (z - min.z) / scaleFactor;
+                            } else {
+                                u = (x - min.x) / size.x;
+                                v = (z - min.z) / size.z;
+                            }
+                        } 
+                        // Paredes laterais (X)
+                        else if (Math.abs(nx) > Math.abs(ny) && Math.abs(nx) > Math.abs(nz)) {
+                            if (useWorldScale) {
+                                u = (z - min.z) / scaleFactor;
+                                v = (y - min.y) / scaleFactor;
+                            } else {
+                                u = (z - min.z) / size.z;
+                                v = (y - min.y) / size.y;
+                            }
+                        } 
+                        // Paredes frontais (Z)
+                        else {
+                            if (useWorldScale) {
+                                u = (x - min.x) / scaleFactor;
+                                v = (y - min.y) / scaleFactor;
+                            } else {
+                                u = (x - min.x) / size.x;
+                                v = (y - min.y) / size.y;
+                            }
+                        }
+
+                        uvs[i * 2] = u;
+                        uvs[i * 2 + 1] = v;
+                    }
+
+                    mesh.geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+                    mesh.geometry.attributes.uv.needsUpdate = true;
+                }
+            });
+        }
+
+        function setEnvironment(mode) {
+            document.querySelectorAll('.env-btn').forEach(b => b.classList.remove('active'));
+            if (mode === 'default') {
+                document.getElementById('env-default').classList.add('active');
+                scene.background = new THREE.Color(0x202020);
+                gridHelper.visible = true;
+                gridHelper.material.color.setHex(0x555555);
+                mapPlane.material.visible = false;
+            } 
+            else if (mode === 'light') {
+                document.getElementById('env-light').classList.add('active');
+                scene.background = new THREE.Color(0xe0e0e0); 
+                gridHelper.visible = true;
+                gridHelper.material.color.setHex(0xaaaaaa); 
+                mapPlane.material.visible = true;
+                mapPlane.material.color.setHex(0xf2f2f2); 
+                mapPlane.material.map = null;
+                mapPlane.material.needsUpdate = true;
+            } 
+            else if (mode === 'satellite') {
+                document.getElementById('env-sat').classList.add('active');
+                scene.background = new THREE.Color(0x050505); 
+                gridHelper.visible = false; 
+                mapPlane.material.visible = true;
+                mapPlane.material.color.setHex(0x111111);
+                mapPlane.material.needsUpdate = true;
+            }
+        }
+
+        function toggleSidebar() {
+            document.getElementById('sidebar').classList.toggle('closed');
+        }
+
+        function triggerFile(id) {
+            document.getElementById(id).click();
+        }
+
+        function toggleLockY() {
+            lockY = !lockY;
+            const btn = document.getElementById('tool-lock-y');
+            if (lockY) {
+                btn.classList.add('locked-active');
+                if (selectedObject) {
+                    dropToFloor(selectedObject);
+                    showStatus("Travado no chão.");
+                } else {
+                    showStatus("Modo Chão Ativado");
+                }
+                transformControl.showY = false;
+            } else {
+                btn.classList.remove('locked-active');
+                transformControl.showY = true;
+                showStatus("Movimento livre.");
+            }
+        }
+
+        function toggleMagicMode() {
+            magicMode = !magicMode;
+            const btn = document.getElementById('tool-magic');
+            
+            clearPreview();
+
+            if(magicMode) {
+                btn.classList.add('active');
+                showStatus("MODO MÁGICO: Clique para selecionar um objeto.");
+                deselect();
+            } else {
+                btn.classList.remove('active');
+                showStatus("Modo padrão.");
+            }
+        }
+
+        function centerSelectedObject() {
+            if (!selectedObject) {
+                showStatus("Selecione um objeto primeiro.");
+                return;
+            }
+            selectedObject.position.set(0, selectedObject.position.y, 0);
+            updateUIValues();
+            showStatus("Objeto centralizado!");
+            orbit.target.set(0, selectedObject.position.y, 0);
+            saveHistory();
+        }
+
+        function dropToFloor(obj) {
+            if(!obj) return;
+            const box = new THREE.Box3().setFromObject(obj);
+            const bottomY = box.min.y;
+            const diff = 0 - bottomY;
+            obj.position.y += diff;
+            updateUIValues();
+        }
+
+        function addPrimitive(type) {
+            let geometry, material, mesh;
+            material = new THREE.MeshStandardMaterial({ color: 0x999999, roughness: 0.6 });
+            
+            if (type === 'cube') {
+                geometry = new THREE.BoxGeometry(2,2,2);
+                mesh = new THREE.Mesh(geometry, material);
+                mesh.position.y = 1;
+            } 
+            else if (type === 'sphere') {
+                geometry = new THREE.SphereGeometry(1.5, 32, 32);
+                mesh = new THREE.Mesh(geometry, material);
+                mesh.position.y = 1.5;
+            }
+            else if (type === 'cylinder') {
+                geometry = new THREE.CylinderGeometry(1, 1, 2, 32);
+                mesh = new THREE.Mesh(geometry, material);
+                mesh.position.y = 1;
+            }
+            else if (type === 'plane') {
+                geometry = new THREE.PlaneGeometry(10, 10);
+                material = new THREE.MeshStandardMaterial({ color: 0x555555, side: THREE.DoubleSide });
+                mesh = new THREE.Mesh(geometry, material);
+                mesh.rotation.x = -Math.PI / 2;
+                mesh.receiveShadow = true;
+                mesh.name = "Area_Plot";
+            }
+            mesh.castShadow = true; mesh.receiveShadow = true;
+            spawnObjectDirect(mesh);
+        }
+
+        function handleFileSelect(input, type) {
+            const file = input.files[0];
+            if (!file) return;
+            const name = file.name.toLowerCase();
+
+            if (type === 'ref') {
+                loadGeoJSON(file);
+            } else if (type === 'model') {
+                if (name.includes('.glb') || name.includes('.gltf')) {
+                    loadGLB(file);
+                } else {
+                    alert("Use .glb ou .gltf.");
+                }
+            }
+            input.value = '';
+        }
+
+        function loadGeoJSON(file) {
+            const reader = new FileReader();
+            reader.onload = function(event) {
+                try {
+                    const json = JSON.parse(event.target.result);
+                    drawGeoJSON(json);
+                    showStatus("Mapa carregado! Use a 'Varinha' para selecionar.");
+                    saveHistory();
+                } catch(err) {
+                    console.error(err);
+                    showStatus("Erro ao ler JSON.");
+                }
+            };
+            reader.readAsText(file);
+        }
+
+        function drawGeoJSON(geojson) {
+            const features = geojson.features || (geojson.type === "FeatureCollection" ? geojson.features : [geojson]);
+            if(!features || features.length === 0) return;
+
+            const center = findCenterRecursive(features);
+            if (!center) {
+                showStatus("Erro: Coordenadas inválidas.");
+                return;
+            }
+
+            const mapGroup = new THREE.Group();
+            mapGroup.name = "Mapa Importado (GeoJSON)";
+
+            while(geoJsonGhostGroup.children.length > 0){ 
+                geoJsonGhostGroup.remove(geoJsonGhostGroup.children[0]); 
+            }
+
+            features.forEach((f) => {
+                if(!f.geometry) return;
+                const coords = f.geometry.coordinates;
+                const type = f.geometry.type;
+
+                const safeLonLat = (c) => {
+                    const res = lonLatToXY(c[0], c[1], center);
+                    if (isNaN(res[0]) || isNaN(res[1])) return [0,0];
+                    return res;
+                }
+
+                if (type.includes("Polygon")) {
+                    const polygons = type === "MultiPolygon" ? coords : [coords];
+                    polygons.forEach((poly) => {
+                        const rings = type === "MultiPolygon" ? poly : poly; 
+                        const outerRing = rings[0];
+                        if (!Array.isArray(outerRing)) return;
+
+                        const points = [];
+                        const shape = new THREE.Shape();
+
+                        outerRing.forEach((c, index) => {
+                            if (c.length >= 2) {
+                                const [x, z] = safeLonLat(c);
+                                points.push(new THREE.Vector3(x, 0, z));
+                                if (index === 0) shape.moveTo(x, -z); 
+                                else shape.lineTo(x, -z);
+                            }
+                        });
+
+                        shape.autoClose = true;
+
+                        if (points.length > 0) {
+                            const geometry = new THREE.BufferGeometry().setFromPoints(points);
+                            const material = new THREE.LineBasicMaterial({ color: 0xD4AF37, linewidth: 2 });
+                            mapGroup.add(new THREE.Line(geometry, material));
+                        }
+
+                        const shapeGeom = new THREE.ShapeGeometry(shape);
+                        const area = THREE.ShapeUtils.area(shape.getPoints());
+                        
+                        const ghostMesh = new THREE.Mesh(shapeGeom, new THREE.MeshBasicMaterial({ visible: false }));
+                        ghostMesh.rotation.x = -Math.PI / 2; 
+                        ghostMesh.position.y = 0; 
+                        
+                        ghostMesh.userData.originalShape = shape;
+                        ghostMesh.userData.area = Math.abs(area); 
+                        
+                        geoJsonGhostGroup.add(ghostMesh);
+                    });
+                }
+                else if (type === "LineString") {
+                    const points = [];
+                    coords.forEach(c => {
+                        const [x, z] = safeLonLat(c);
+                        points.push(new THREE.Vector3(x, 0, z));
+                    });
+                    const geometry = new THREE.BufferGeometry().setFromPoints(points);
+                    mapGroup.add(new THREE.Line(geometry, new THREE.LineBasicMaterial({ color: 0xAAAAAA })));
+                }
+            });
+
+            mapGroup.position.y = 0.1; 
+            objectsGroup.add(mapGroup);
+            addAssetToList(mapGroup, "Mapa GeoJSON");
+            
+            camera.position.set(0, 100, 100);
+            orbit.target.set(0,0,0);
+        }
+
+        // --- SISTEMA DE PREVIEW E CRIAÇÃO ---
+
+        function previewSelection(ghostMesh) {
+            if (previewMesh) {
+                scene.remove(previewMesh);
+                previewMesh = null;
+            }
+
+            pendingGhost = ghostMesh; 
+            const shape = ghostMesh.userData.originalShape;
+
+            const geometry = new THREE.ShapeGeometry(shape);
+            const material = new THREE.MeshBasicMaterial({ 
+                color: 0x00ff00, 
+                transparent: true, 
+                opacity: 0.5, 
+                side: THREE.DoubleSide,
+                depthTest: false 
+            });
+
+            previewMesh = new THREE.Mesh(geometry, material);
+            previewMesh.rotation.x = -Math.PI / 2;
+            previewMesh.position.y = 0.2; 
+            previewMesh.renderOrder = 999; 
+
+            scene.add(previewMesh);
+            
+            const btn = document.getElementById('btn-confirm-creation');
+            btn.style.display = 'flex';
+            
+            showStatus("Objeto identificado! Clique em CONFIRMAR para criar.");
+        }
+
+        function clearPreview() {
+            if (previewMesh) {
+                scene.remove(previewMesh);
+                previewMesh = null;
+            }
+            pendingGhost = null;
+            document.getElementById('btn-confirm-creation').style.display = 'none';
+        }
+
+        function confirmCreation() {
+            if (!pendingGhost) return;
+            createExtrusionFromGhost(pendingGhost);
+            clearPreview();
+            
+            // MODIFICADO: Não desativa o modo mágico automaticamente
+            // toggleMagicMode(); 
+            showStatus("Objeto Criado! Continue clicando ou desligue a varinha.");
+            saveHistory();
+        }
+
+        function createExtrusionFromGhost(ghostMesh) {
+            const shape = ghostMesh.userData.originalShape;
+            
+            const extrudeSettings = {
+                steps: 1,
+                depth: 0.05, 
+                bevelEnabled: false
+            };
+
+            const geometry = new THREE.ExtrudeGeometry(shape, extrudeSettings);
+            // Material padrão inicial
+            const material = new THREE.MeshStandardMaterial({ color: 0x999999, roughness: 0.8 });
+            
+            const mesh = new THREE.Mesh(geometry, material);
+            mesh.rotation.x = -Math.PI / 2; 
+            mesh.receiveShadow = true;
+            mesh.castShadow = true;
+            
+            mesh.userData.isExtruded = true;
+            mesh.userData.baseShape = shape; 
+            mesh.userData.currentHeight = 0.05;
+            
+            mesh.position.y = 0.05; 
+
+            objectsGroup.add(mesh);
+            selectObject(mesh);
+        }
+
+        function updateExtrusionHeight() {
+            if (!selectedObject || !selectedObject.userData.isExtruded) return;
+            
+            const val = parseFloat(document.getElementById('inp-extrusion').value);
+            if (isNaN(val) || val < 0) return;
+
+            const shape = selectedObject.userData.baseShape;
+            
+            const newSettings = {
+                steps: 1,
+                depth: val,
+                bevelEnabled: false
+            };
+            
+            const newGeom = new THREE.ExtrudeGeometry(shape, newSettings);
+            const currentMat = selectedObject.material;
+            
+            selectedObject.geometry.dispose();
+            selectedObject.geometry = newGeom;
+            selectedObject.userData.currentHeight = val;
+            
+            // Se já tem textura, reaplica o mapeamento UV para a nova geometria (World Scale)
+            if(currentMat.map) {
+                automapUVs(selectedObject, true);
+                currentMat.needsUpdate = true;
+            }
+            saveHistory();
+        }
+
+        function findCenterRecursive(obj) {
+            if (Array.isArray(obj)) {
+                if (obj.length >= 2 && typeof obj[0] === 'number' && typeof obj[1] === 'number') {
+                    return obj;
+                }
+                for (let item of obj) {
+                    const found = findCenterRecursive(item);
+                    if (found) return found;
+                }
+            } else if (typeof obj === 'object' && obj !== null) {
+                if (obj.geometry) return findCenterRecursive(obj.geometry);
+                if (obj.coordinates) return findCenterRecursive(obj.coordinates);
+                if (obj.features) return findCenterRecursive(obj.features);
+            }
+            return null;
+        }
+
+        function lonLatToXY(lon, lat, center) {
+            if (typeof lon !== 'number' || typeof lat !== 'number') return [0,0];
+            const R = 6378137; 
+            const dLon = (lon - center[0]) * (Math.PI / 180);
+            const latRad = center[1] * (Math.PI / 180);
+            const x = dLon * R * Math.cos(latRad);
+            const z = (lat - center[1]) * (Math.PI / 180) * R * -1;
+            return [x, z];
+        }
+
+        function loadGLB(file) {
+            const url = URL.createObjectURL(file);
+            const loader = new THREE.GLTFLoader();
+            showStatus("Carregando modelo...");
+            loader.load(url, function(gltf) {
+                const model = gltf.scene;
+                model.traverse(o => { 
+                    if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } 
+                });
+                const assetName = file.name.replace(/\.(glb|gltf)$/i, '');
+                loadedAssets[assetName] = model; 
+                addAssetButton(assetName);
+                spawnObject(assetName);
+                showStatus("Modelo importado!");
+            }, undefined, (error) => {
+                console.error(error);
+                showStatus("Erro ao carregar GLB.");
+            });
+        }
+
+        function addAssetButton(name) {
+            const lib = document.getElementById('assetLibrary');
+            if(lib.children[0] && lib.children[0].innerText.includes("Nenhum")) lib.innerHTML = "";
+            if(Array.from(lib.children).some(c => c.innerText.includes(name))) return;
+
+            const item = document.createElement('div');
+            item.className = 'asset-item';
+            item.innerHTML = `
+                <div class="asset-clickable" onclick="spawnObject('${name}')">
+                    <span class="material-icons asset-icon">inventory_2</span>
+                    <span class="text">${name}</span>
+                </div>
+                <button class="btn-delete-asset" title="Remover" onclick="removeAssetFromLib(this, '${name}')">
+                    <span class="material-icons" style="font-size:18px">delete_forever</span>
+                </button>
+            `;
+            lib.appendChild(item);
+        }
+
+        function addAssetToList(obj, name) {
+            const lib = document.getElementById('assetLibrary');
+            if(lib.children[0] && lib.children[0].innerText.includes("Nenhum")) lib.innerHTML = "";
+            
+            const uniqueID = 'map_' + Date.now();
+            obj.userData.listID = uniqueID;
+
+            const item = document.createElement('div');
+            item.className = 'asset-item';
+            item.id = uniqueID;
+            item.innerHTML = `
+                <div class="asset-clickable" onclick="selectObjectByID('${obj.uuid}')">
+                    <span class="material-icons asset-icon" style="color:#D4AF37;">map</span>
+                    <span class="text">${name}</span>
+                </div>
+                <button class="btn-delete-asset" title="Remover" onclick="deleteObjectByUUID('${obj.uuid}', '${uniqueID}')">
+                    <span class="material-icons" style="font-size:18px">delete_forever</span>
+                </button>
+            `;
+            lib.appendChild(item);
+        }
+
+        function selectObjectByID(uuid) {
+            const obj = objectsGroup.children.find(c => c.uuid === uuid);
+            if(obj) selectObject(obj);
+        }
+        
+        function deleteObjectByUUID(uuid, listID) {
+            const obj = objectsGroup.children.find(c => c.uuid === uuid);
+            if(obj) {
+                objectsGroup.remove(obj);
+                document.getElementById(listID).remove();
+                deselect();
+                saveHistory();
+            }
+        }
+
+        function removeAssetFromLib(btn, name) {
+            delete loadedAssets[name];
+            btn.parentElement.remove();
+            if(document.getElementById('assetLibrary').children.length === 0) {
+                document.getElementById('assetLibrary').innerHTML = '<div style="text-align:center; color:#666; font-size:0.8rem; padding:10px;">Nenhum modelo importado</div>';
+            }
+        }
+
+        function spawnObject(assetName) {
+            if (!loadedAssets[assetName]) return;
+            const newObj = loadedAssets[assetName].clone();
+            spawnObjectDirect(newObj);
+        }
+
+        function spawnObjectDirect(obj) {
+            const target = orbit.target.clone();
+            obj.position.set(target.x, target.y, target.z);
+            objectsGroup.add(obj);
+            if (lockY) dropToFloor(obj);
+            selectObject(obj);
+            saveHistory();
+        }
+
+        function toggleDeepSelect() {
+            deepSelectMode = !deepSelectMode;
+            const btn = document.getElementById('tool-deep-select');
+            if (deepSelectMode) {
+                btn.classList.add('active', 'danger');
+                showStatus("MODO GRUPO: Seleção individual ativada.");
+                deselect();
+            } else {
+                btn.classList.remove('active', 'danger');
+                showStatus("Modo Padrão");
+                deselect();
+            }
+        }
+
+        // --- NOVAS FUNÇÕES DE TRAVAMENTO ---
+
+        function lockSelectedObject() {
+            if (!selectedObject) return;
+            
+            selectedObject.userData.locked = true;
+            deselect();
+            showStatus("Objeto TRAVADO! Agora você pode clicar através dele.");
+        }
+
+        function unlockAllObjects() {
+            objectsGroup.traverse(obj => {
+                if (obj.userData.locked) {
+                    obj.userData.locked = false;
+                }
+            });
+            showStatus("Todos os objetos foram DESTRAVADOS.");
+        }
+
+        function onPointerDown(event) {
+            if (event.target.closest('.tool-btn') || event.target.closest('#sidebar') || event.target.closest('#menu-toggle') || event.target.closest('#btn-confirm-creation')) return;
+
+            const rect = renderer.domElement.getBoundingClientRect();
+            mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+            mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+
+            raycaster.setFromCamera(mouse, camera);
+
+            // MODO MÁGICO COM INTELIGÊNCIA DE ÁREA
+            if (magicMode) {
+                const ghostIntersects = raycaster.intersectObjects(geoJsonGhostGroup.children, true);
+                
+                if (ghostIntersects.length > 0) {
+                    ghostIntersects.sort((a, b) => {
+                        return (a.object.userData.area || 999999) - (b.object.userData.area || 999999);
+                    });
+
+                    const smallestObj = ghostIntersects[0].object;
+                    previewSelection(smallestObj);
+                    return;
+                } else {
+                    clearPreview();
+                }
+                return;
+            }
+
+            // SELEÇÃO PADRÃO - MODIFICADA PARA SUPORTAR TRAVA (LOCK)
+            const intersects = raycaster.intersectObjects(objectsGroup.children, true);
+
+            if (intersects.length > 0) {
+                let target = null;
+
+                // Loop para encontrar o primeiro objeto que NÃO está travado
+                for (let i = 0; i < intersects.length; i++) {
+                    let candidate = intersects[i].object;
+                    let isLocked = false;
+                    
+                    // Verifica se o objeto ou algum pai dele está travado
+                    let p = candidate;
+                    while(p !== objectsGroup && p !== null) {
+                        if (p.userData.locked) {
+                            isLocked = true;
+                            break;
+                        }
+                        p = p.parent;
+                    }
+
+                    if (!isLocked) {
+                        target = candidate;
+                        break; // Encontrou um objeto válido (não travado)
+                    }
+                }
+
+                if (target) {
+                    if (!deepSelectMode) {
+                        while(target.parent !== objectsGroup && target.parent !== null) {
+                            // Se o pai estiver travado, não podemos selecionar o grupo (já verificado acima, mas por segurança)
+                            if (target.parent.userData.locked) break; 
+                            target = target.parent;
+                        }
+                    }
+                    if (target.parent === objectsGroup || deepSelectMode) {
+                        selectObject(target);
+                    }
+                } else {
+                    // Se só clicou em coisas travadas ou vazio
+                    if (!transformControl.dragging) deselect();
+                }
+            } else {
+                if (!transformControl.dragging) deselect();
+            }
+        }
+
+        function selectObject(object) {
+            selectedObject = object;
+            transformControl.attach(object);
+            transformControl.showY = !lockY;
+            document.getElementById('properties-container').style.display = 'block';
+            updateUIValues();
+        }
+
+        function deselect() {
+            selectedObject = null;
+            transformControl.detach();
+            document.getElementById('properties-container').style.display = 'none';
+        }
+
+        function updateUIValues() {
+            if(!selectedObject) return;
+            
+            const p = selectedObject.position;
+            const s = selectedObject.scale;
+            document.getElementById('inp-px').value = p.x.toFixed(2);
+            document.getElementById('inp-py').value = p.y.toFixed(2);
+            document.getElementById('inp-pz').value = p.z.toFixed(2);
+            document.getElementById('inp-sx').value = s.x.toFixed(2);
+            document.getElementById('inp-sy').value = s.y.toFixed(2);
+            document.getElementById('inp-sz').value = s.z.toFixed(2);
+
+            const heightRow = document.getElementById('row-extrusion');
+            if (selectedObject.userData.isExtruded) {
+                heightRow.style.display = 'flex';
+                document.getElementById('inp-extrusion').value = selectedObject.userData.currentHeight || 0.1;
+            } else {
+                heightRow.style.display = 'none';
+            }
+        }
+
+        function updateTransform(type) {
+            if(!selectedObject) return;
+            if(type === 'pos') {
+                const x = parseFloat(document.getElementById('inp-px').value);
+                const y = parseFloat(document.getElementById('inp-py').value);
+                const z = parseFloat(document.getElementById('inp-pz').value);
+                selectedObject.position.set(x, y, z);
+            } else if (type === 'scale') {
+                const x = parseFloat(document.getElementById('inp-sx').value);
+                const y = parseFloat(document.getElementById('inp-sy').value);
+                const z = parseFloat(document.getElementById('inp-sz').value);
+                selectedObject.scale.set(x, y, z);
+            }
+            // Não salvamos o histórico aqui pois o input dispara a cada digito, o 'onchange' é melhor, mas já temos o dragging.
+            // Para inputs manuais, o onchange já é o ideal.
+            saveHistory();
+        }
+
+        function setMode(mode) {
+            ['translate','rotate','scale', 'rotate-y'].forEach(m => {
+                const el = document.getElementById('tool-'+m);
+                if(el) el.classList.remove('active');
+            });
+            
+            if (mode === 'rotate-y') {
+                transformControl.setMode('rotate');
+                transformControl.showX = false;
+                transformControl.showZ = false;
+                transformControl.showY = true;
+                document.getElementById('tool-rotate-y').classList.add('active');
+                showStatus("Rotação Travada no Chão (Eixo Y)");
+                return;
+            } else {
+                transformControl.showX = true;
+                transformControl.showZ = true;
+                transformControl.showY = true;
+            }
+
+            transformControl.setMode(mode);
+            document.getElementById('tool-'+mode).classList.add('active');
+            
+            if(mode === 'translate') {
+                transformControl.showY = !lockY;
+            }
+        }
+
+        function duplicateSelected() {
+            if (!selectedObject) return;
+            const clone = selectedObject.clone();
+            clone.position.x += 2; 
+            
+            if (selectedObject.userData.isExtruded) {
+                clone.userData.isExtruded = true;
+                clone.userData.baseShape = selectedObject.userData.baseShape;
+                clone.userData.currentHeight = selectedObject.userData.currentHeight;
+                clone.geometry = selectedObject.geometry.clone(); 
+                // Mantém UV correto no clone
+                if(clone.material.map) automapUVs(clone, true);
+            }
+            
+            // Se duplicar um objeto travado, o clone deve nascer destravado para ser útil
+            clone.userData.locked = false;
+
+            selectedObject.parent.add(clone);
+            selectObject(clone);
+            showStatus("Objeto duplicado!");
+            saveHistory();
+        }
+
+        function deleteSelected() {
+            if (!selectedObject) return;
+            if(selectedObject.userData.listID) {
+                const el = document.getElementById(selectedObject.userData.listID);
+                if(el) el.remove();
+            }
+            selectedObject.parent.remove(selectedObject);
+            deselect();
+            showStatus("Objeto removido.");
+            saveHistory();
+        }
+
+        function onKeyDown(event) {
+            if (event.target.tagName === 'INPUT') return;
+            const key = event.key.toLowerCase();
+            if (key === "delete") deleteSelected();
+            if (event.ctrlKey && key === "d") { event.preventDefault(); duplicateSelected(); }
+            if (event.ctrlKey && key === "z") { event.preventDefault(); undo(); }
+            if (event.ctrlKey && key === "y") { event.preventDefault(); redo(); }
+            
+            if (key === "g") setMode('translate');
+            if (key === "r") setMode('rotate');
+            if (key === "s") setMode('scale');
+        }
+
+        function exportScene() {
+            if (objectsGroup.children.length === 0) {
+                showStatus("Cena vazia.");
+                return;
+            }
+            deselect();
+            
+            // MOSTRA O LOADING
+            const loadingOverlay = document.getElementById('loading-overlay');
+            loadingOverlay.style.display = 'flex';
+
+            // Pequeno delay para o navegador renderizar a tela de loading antes de travar no processo de exportação
+            setTimeout(() => {
+                const exporter = new THREE.GLTFExporter();
+                exporter.parse(objectsGroup, function (result) {
+                    const blob = new Blob([result], { type: 'application/octet-stream' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'cenario_3d.glb';
+                    a.click();
+                    
+                    // ESCONDE O LOADING
+                    loadingOverlay.style.display = 'none';
+                    showStatus("Exportado!");
+                }, { binary: true });
+            }, 100);
+        }
+
+        function showStatus(msg) {
+            const el = document.getElementById('status');
+            el.textContent = msg;
+            el.style.display = 'block';
+            setTimeout(() => { el.style.display = 'none'; }, 4000);
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            orbit.update();
+            renderer.render(scene, camera);
+        }
+    </script>
+</body>
+</html>
