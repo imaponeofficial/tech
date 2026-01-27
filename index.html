@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Web 3D Builder - Versão Otimizada (Instancing & Undo)</title>
+    <title>Web 3D Builder - Versão Otimizada</title>
     
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
@@ -21,6 +21,16 @@
         /* ONDE O 3D ACONTECE */
         #viewport { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; background: #202020; transition: background 0.3s; }
         
+        /* --- CAIXA DE SELEÇÃO (NOVO) --- */
+        #selection-box {
+            position: absolute;
+            border: 2px dashed #00ff00;
+            background-color: rgba(0, 255, 0, 0.1);
+            display: none;
+            z-index: 100;
+            pointer-events: none; /* Permite que o mouse passe através */
+        }
+
         /* --- BOTÃO MENU HAMBÚRGUER --- */
         #menu-toggle {
             position: absolute; top: 15px; left: 15px; z-index: 10;
@@ -147,9 +157,10 @@
         .tool-btn.active { background: #D4AF37; color: #000; box-shadow: 0 0 10px rgba(212, 175, 55, 0.4); }
         .tool-btn.danger.active { background: #ff4444; color: white; box-shadow: 0 0 10px rgba(255, 68, 68, 0.4); }
         .tool-btn.magic.active { background: #9c27b0; color: white; box-shadow: 0 0 10px rgba(156, 39, 176, 0.5); }
+        .tool-btn.selection-active { background: #00ff00; color: #000; box-shadow: 0 0 10px rgba(0, 255, 0, 0.5); }
+        
         .tool-btn.locked-active { background: #4CAF50; color: white; } 
         
-        /* Estilos especiais para o botão de travar */
         .tool-btn.lock-btn:hover { color: #f39c12; }
         .tool-btn.unlock-btn:hover { color: #2ecc71; }
 
@@ -165,7 +176,7 @@
             font-size: 0.95rem; pointer-events: none;
         }
 
-        /* Loading Overlay (Novo) */
+        /* Loading Overlay */
         #loading-overlay {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
             background: rgba(0,0,0,0.85); z-index: 9999;
@@ -180,15 +191,23 @@
         .loading-text { color: #D4AF37; font-size: 1.2rem; font-weight: bold; letter-spacing: 1px; }
 
         /* --- BOTÃO FLUTUANTE DE CONFIRMAÇÃO --- */
-        #btn-confirm-creation {
+        #btn-confirm-creation, #btn-multi-delete {
             position: absolute; bottom: 100px; left: 50%; transform: translateX(-50%); z-index: 25;
-            background: #27ae60; color: white; border: none; padding: 15px 30px;
+            padding: 15px 30px;
             border-radius: 50px; font-weight: bold; font-size: 1rem; cursor: pointer;
             box-shadow: 0 5px 15px rgba(0,0,0,0.5); display: none; /* Oculto por padrão */
             animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-            display: none; align-items: center; gap: 10px;
+            align-items: center; gap: 10px; border: none;
         }
+        #btn-confirm-creation { background: #27ae60; color: white; }
         #btn-confirm-creation:hover { background: #2ecc71; transform: translateX(-50%) scale(1.05); }
+
+        /* BOTÃO DELETAR MÚLTIPLOS (NOVO) */
+        #btn-multi-delete {
+            background: #ff4444; color: white;
+            bottom: 110px;
+        }
+        #btn-multi-delete:hover { background: #ff2222; transform: translateX(-50%) scale(1.05); }
 
         @keyframes popIn {
             from { opacity: 0; transform: translateX(-50%) scale(0.5); }
@@ -209,6 +228,8 @@
         <div class="loading-spinner"></div>
         <div class="loading-text" id="loading-msg">PROCESSANDO...</div>
     </div>
+
+    <div id="selection-box"></div>
 
     <button id="menu-toggle" onclick="toggleSidebar()">
         <span class="material-icons">menu</span>
@@ -348,6 +369,12 @@
         </button>
 
         <div class="divider"></div>
+        
+        <button class="tool-btn" id="tool-box-select" title="Seleção em Área (Arrastar para Selecionar)" onclick="toggleBoxSelect()">
+            <span class="material-icons">select_all</span>
+        </button>
+
+        <div class="divider"></div>
 
         <button class="tool-btn magic" id="tool-magic" title="Selecionar Área do GeoJSON (Criar Chão/Extrusão)" onclick="toggleMagicMode()">
             <span class="material-icons">auto_fix_high</span>
@@ -376,6 +403,10 @@
     <button id="btn-confirm-creation" onclick="confirmCreation()">
         <span class="material-icons">check_circle</span> CONFIRMAR CRIAÇÃO
     </button>
+    
+    <button id="btn-multi-delete" onclick="deleteMultiSelected()">
+        <span class="material-icons">delete_sweep</span> DELETAR SELEÇÃO
+    </button>
 
     <div id="viewport"></div>
     <div id="status">Pronto</div>
@@ -394,14 +425,23 @@
         let deepSelectMode = false;
         let magicMode = false;
 
+        // Variáveis para Seleção em Caixa
+        let boxSelectMode = false;
+        let isBoxSelecting = false;
+        let boxStartPoint = { x: 0, y: 0 };
+        let boxSelectionDiv = document.getElementById('selection-box');
+        let multiSelectedObjects = []; 
+        let selectionHelpers = []; // Visual helpers
+
         // Variáveis para o sistema de Preview/Confirmação
         let previewMesh = null; 
         let pendingGhost = null; 
 
-        // SISTEMA DE UNDO/REDO
+        // SISTEMA DE UNDO/REDO (OTIMIZADO)
         let historyStack = [];
         let historyStep = -1;
-        const MAX_HISTORY = 20; // Limite para não pesar a memória
+        // OTIMIZAÇÃO: Reduzido de 20 para 8 para evitar travamento de memória
+        const MAX_HISTORY = 8; 
         
         init();
         initTextureSystem();
@@ -473,7 +513,14 @@
             scene.add(transformControl);
 
             window.addEventListener('resize', onWindowResize);
-            renderer.domElement.addEventListener('pointerdown', onPointerDown);
+            
+            // Listeners de Pointer (Unificado Mouse/Touch)
+            const canvas = renderer.domElement;
+            canvas.addEventListener('pointerdown', onPointerDown);
+            canvas.addEventListener('pointermove', onPointerMove);
+            canvas.addEventListener('pointerup', onPointerUp);
+            canvas.addEventListener('pointercancel', onPointerUp);
+            
             window.addEventListener('keydown', onKeyDown);
             
             // Salvar estado inicial
@@ -482,6 +529,8 @@
 
         // --- SISTEMA DE UNDO / REDO ---
         function saveHistory() {
+            // OTIMIZAÇÃO: Evita salvar se nada mudou drasticamente (opcional, mas o limite MAX_HISTORY ajuda mais)
+            
             // Remove estados futuros se estivermos no meio do histórico
             if (historyStep < historyStack.length - 1) {
                 historyStack = historyStack.slice(0, historyStep + 1);
@@ -519,9 +568,22 @@
 
         function restoreHistoryState(jsonString) {
             deselect();
-            // Remove objetos atuais
+            clearMultiSelection(); // Limpa seleção múltipla ao desfazer
+
+            // OTIMIZAÇÃO: Limpeza profunda para evitar vazamento de memória GPU
             while(objectsGroup.children.length > 0){ 
-                objectsGroup.remove(objectsGroup.children[0]); 
+                const obj = objectsGroup.children[0];
+                objectsGroup.remove(obj); 
+                // Função auxiliar para descartar geometrias/materiais da memória
+                if(obj.traverse) {
+                    obj.traverse(child => {
+                        if(child.geometry) child.geometry.dispose();
+                        if(child.material) {
+                            if(Array.isArray(child.material)) child.material.forEach(m => m.dispose());
+                            else child.material.dispose();
+                        }
+                    });
+                }
             }
             
             // Carrega estado
@@ -541,14 +603,6 @@
             
             // Atualiza a biblioteca lateral se sumiu algo
             document.getElementById('assetLibrary').innerHTML = '<div style="text-align:center; color:#666; font-size:0.8rem; padding:10px;">Nenhum modelo importado</div>';
-            // Recriar lista (simplificado: limpa e recria baseado no que está na cena)
-            objectsGroup.children.forEach(c => {
-                if (c.userData.listID) { // É um asset importado ou mapa
-                   // Recriar botão na UI se necessário, mas para simplificar o undo/redo visual,
-                   // vamos focar que o objeto 3D volta. O botão da lista pode se perder visualmente se não formos complexos,
-                   // mas o objeto está lá.
-                }
-            });
         }
 
         function updateUndoRedoUI() {
@@ -556,7 +610,7 @@
             document.getElementById('tool-redo').style.opacity = historyStep < historyStack.length - 1 ? '1' : '0.3';
         }
 
-        // --- Sistema de Texturas Realistas (Atualizado para Repositório Unificado) ---
+        // --- Sistema de Texturas Realistas ---
         function initTextureSystem() {
             // URL base fornecida
             const baseUrl = "https://imaponeofficial.github.io/textura/";
@@ -589,9 +643,7 @@
             panel.appendChild(catDiv);
         }
 
-        // --- CACHE DE TEXTURAS E MATERIAIS (INSTANCING FIX) ---
-        // Agora cacheamos o MATERIAL inteiro. Se 100 objetos usam a textura X,
-        // todos usarão a mesma instância de material.
+        // --- CACHE DE TEXTURAS E MATERIAIS ---
         const sharedMaterials = {}; 
 
         function applyTextureToSelection(url) {
@@ -599,13 +651,9 @@
             
             showStatus("Aplicando textura...");
 
-            // 1. Correção de UV: Agora mapeia baseado no tamanho REAL do mundo (World Space)
-            // Isso permite que o material tenha repeat (1,1) e a geometria se ajuste.
             automapUVs(selectedObject, true); 
 
-            // 2. Verifica se já existe um material para essa textura
             if (sharedMaterials[url]) {
-                console.log("Usando Material Compartilhado (Instância existente).");
                 selectedObject.traverse((node) => {
                     if (node.isMesh) {
                         node.material = sharedMaterials[url];
@@ -617,8 +665,6 @@
                 return;
             }
 
-            // 3. Se não existe, cria um novo e salva no cache
-            console.log("Criando novo Material Compartilhado...");
             const loader = new THREE.TextureLoader();
             loader.setCrossOrigin('anonymous');
 
@@ -626,9 +672,6 @@
                 texture.wrapS = THREE.RepeatWrapping;
                 texture.wrapT = THREE.RepeatWrapping;
                 texture.encoding = THREE.sRGBEncoding;
-                
-                // IMPORTANTE: Repeat fica 1,1. O controle de escala é feito no UV do objeto.
-                // Isso garante que o GLTFExporter salve apenas 1 textura.
                 texture.repeat.set(1, 1); 
 
                 const newMat = new THREE.MeshStandardMaterial({
@@ -638,7 +681,7 @@
                     metalness: 0
                 });
 
-                sharedMaterials[url] = newMat; // Salva no cache
+                sharedMaterials[url] = newMat; 
 
                 selectedObject.traverse((node) => {
                     if (node.isMesh) {
@@ -654,8 +697,6 @@
             });
         }
 
-        // --- FUNÇÃO DE CORREÇÃO DE UV (MODIFICADA PARA INSTANCING) ---
-        // useWorldScale: se true, calcula UVs baseados em metros (1.0 UV = 1.0 metro)
         function automapUVs(object, useWorldScale = false) {
             object.traverse((mesh) => {
                 if (mesh.isMesh && mesh.geometry) {
@@ -673,9 +714,6 @@
                     const count = posAttribute.count;
                     const uvs = new Float32Array(count * 2);
 
-                    // Escala da textura (densidade)
-                    // Se useWorldScale é true, dividimos por 1 (1 repetição por metro).
-                    // Se quiser texturas mais densas, diminua esse valor (ex: 0.5).
                     const scaleFactor = useWorldScale ? 2.0 : 1.0; 
 
                     for (let i = 0; i < count; i++) {
@@ -692,9 +730,7 @@
 
                         let u, v;
 
-                        // Se a normal aponta para Cima/Baixo (Y)
                         if (Math.abs(ny) > Math.abs(nx) && Math.abs(ny) > Math.abs(nz)) {
-                            // Se for World Scale, não dividimos pelo size total, apenas deslocamos
                             if (useWorldScale) {
                                 u = (x - min.x) / scaleFactor;
                                 v = (z - min.z) / scaleFactor;
@@ -703,7 +739,6 @@
                                 v = (z - min.z) / size.z;
                             }
                         } 
-                        // Paredes laterais (X)
                         else if (Math.abs(nx) > Math.abs(ny) && Math.abs(nx) > Math.abs(nz)) {
                             if (useWorldScale) {
                                 u = (z - min.z) / scaleFactor;
@@ -713,7 +748,6 @@
                                 v = (y - min.y) / size.y;
                             }
                         } 
-                        // Paredes frontais (Z)
                         else {
                             if (useWorldScale) {
                                 u = (x - min.x) / scaleFactor;
@@ -804,6 +838,8 @@
                 btn.classList.remove('active');
                 showStatus("Modo padrão.");
             }
+            // Desativa box select se ativar magic
+            if(boxSelectMode) toggleBoxSelect();
         }
 
         function centerSelectedObject() {
@@ -1025,8 +1061,6 @@
             createExtrusionFromGhost(pendingGhost);
             clearPreview();
             
-            // MODIFICADO: Não desativa o modo mágico automaticamente
-            // toggleMagicMode(); 
             showStatus("Objeto Criado! Continue clicando ou desligue a varinha.");
             saveHistory();
         }
@@ -1041,7 +1075,6 @@
             };
 
             const geometry = new THREE.ExtrudeGeometry(shape, extrudeSettings);
-            // Material padrão inicial
             const material = new THREE.MeshStandardMaterial({ color: 0x999999, roughness: 0.8 });
             
             const mesh = new THREE.Mesh(geometry, material);
@@ -1080,7 +1113,6 @@
             selectedObject.geometry = newGeom;
             selectedObject.userData.currentHeight = val;
             
-            // Se já tem textura, reaplica o mapeamento UV para a nova geometria (World Scale)
             if(currentMat.map) {
                 automapUVs(selectedObject, true);
                 currentMat.needsUpdate = true;
@@ -1247,8 +1279,41 @@
             showStatus("Todos os objetos foram DESTRAVADOS.");
         }
 
+        // --- SISTEMA DE SELEÇÃO EM CAIXA (BOX SELECT) ---
+        function toggleBoxSelect() {
+            boxSelectMode = !boxSelectMode;
+            const btn = document.getElementById('tool-box-select');
+            
+            deselect();
+            clearMultiSelection();
+
+            if (boxSelectMode) {
+                btn.classList.add('selection-active');
+                showStatus("MODO MÚLTIPLO: Arraste para selecionar vários itens.");
+                orbit.enabled = false; // Desativa rotação para permitir arrastar
+            } else {
+                btn.classList.remove('selection-active');
+                showStatus("Modo Padrão");
+                orbit.enabled = true;
+            }
+        }
+
         function onPointerDown(event) {
-            if (event.target.closest('.tool-btn') || event.target.closest('#sidebar') || event.target.closest('#menu-toggle') || event.target.closest('#btn-confirm-creation')) return;
+            if (event.target.closest('.tool-btn') || event.target.closest('#sidebar') || event.target.closest('#menu-toggle') || event.target.closest('#btn-confirm-creation') || event.target.closest('#btn-multi-delete')) return;
+
+            // Se for modo Box Select
+            if (boxSelectMode) {
+                isBoxSelecting = true;
+                boxStartPoint.x = event.clientX;
+                boxStartPoint.y = event.clientY;
+                
+                boxSelectionDiv.style.left = event.clientX + 'px';
+                boxSelectionDiv.style.top = event.clientY + 'px';
+                boxSelectionDiv.style.width = '0px';
+                boxSelectionDiv.style.height = '0px';
+                boxSelectionDiv.style.display = 'block';
+                return;
+            }
 
             const rect = renderer.domElement.getBoundingClientRect();
             mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
@@ -1274,18 +1339,14 @@
                 return;
             }
 
-            // SELEÇÃO PADRÃO - MODIFICADA PARA SUPORTAR TRAVA (LOCK)
+            // SELEÇÃO PADRÃO
             const intersects = raycaster.intersectObjects(objectsGroup.children, true);
 
             if (intersects.length > 0) {
                 let target = null;
-
-                // Loop para encontrar o primeiro objeto que NÃO está travado
                 for (let i = 0; i < intersects.length; i++) {
                     let candidate = intersects[i].object;
                     let isLocked = false;
-                    
-                    // Verifica se o objeto ou algum pai dele está travado
                     let p = candidate;
                     while(p !== objectsGroup && p !== null) {
                         if (p.userData.locked) {
@@ -1294,17 +1355,15 @@
                         }
                         p = p.parent;
                     }
-
                     if (!isLocked) {
                         target = candidate;
-                        break; // Encontrou um objeto válido (não travado)
+                        break;
                     }
                 }
 
                 if (target) {
                     if (!deepSelectMode) {
                         while(target.parent !== objectsGroup && target.parent !== null) {
-                            // Se o pai estiver travado, não podemos selecionar o grupo (já verificado acima, mas por segurança)
                             if (target.parent.userData.locked) break; 
                             target = target.parent;
                         }
@@ -1313,7 +1372,6 @@
                         selectObject(target);
                     }
                 } else {
-                    // Se só clicou em coisas travadas ou vazio
                     if (!transformControl.dragging) deselect();
                 }
             } else {
@@ -1321,7 +1379,139 @@
             }
         }
 
+        function onPointerMove(event) {
+            if (isBoxSelecting && boxSelectMode) {
+                const currentX = event.clientX;
+                const currentY = event.clientY;
+                
+                const width = Math.abs(currentX - boxStartPoint.x);
+                const height = Math.abs(currentY - boxStartPoint.y);
+                const newLeft = Math.min(currentX, boxStartPoint.x);
+                const newTop = Math.min(currentY, boxStartPoint.y);
+                
+                boxSelectionDiv.style.width = width + 'px';
+                boxSelectionDiv.style.height = height + 'px';
+                boxSelectionDiv.style.left = newLeft + 'px';
+                boxSelectionDiv.style.top = newTop + 'px';
+            }
+        }
+
+        function onPointerUp(event) {
+            if (isBoxSelecting && boxSelectMode) {
+                isBoxSelecting = false;
+                // CORREÇÃO: Executar a seleção ANTES de esconder a div
+                // Se esconder antes, o getBoundingClientRect retorna zeros
+                performBoxSelection();
+                boxSelectionDiv.style.display = 'none';
+            }
+        }
+
+        function performBoxSelection() {
+            clearMultiSelection();
+            
+            // Obter dimensões do DOM Rect da caixa
+            const rect = boxSelectionDiv.getBoundingClientRect();
+            
+            // Se a caixa for muito pequena (clique simples), ignorar
+            if (rect.width < 5 || rect.height < 5) return;
+
+            const frustum = new THREE.Frustum();
+            const projScreenMatrix = new THREE.Matrix4();
+            projScreenMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+            frustum.setFromProjectionMatrix(projScreenMatrix);
+
+            // Coletar objetos (Meshes Visíveis)
+            const candidates = [];
+            
+            // Usar Set para evitar adicionar o mesmo objeto pai várias vezes
+            const parentSet = new Set();
+            
+            objectsGroup.traverse((obj) => {
+                if (obj.isMesh && obj.visible) {
+                    let p = obj;
+                    let locked = false;
+                    while(p) { if(p.userData.locked) locked=true; p=p.parent; }
+                    if(!locked) candidates.push(obj);
+                }
+            });
+
+            candidates.forEach(obj => {
+                const pos = new THREE.Vector3();
+                obj.getWorldPosition(pos);
+                pos.project(camera); 
+                
+                const x = (pos.x * .5 + .5) * window.innerWidth;
+                const y = (-(pos.y * .5) + .5) * window.innerHeight;
+                
+                if (x >= rect.left && x <= rect.right &&
+                    y >= rect.top && y <= rect.bottom) {
+                    
+                    // CORREÇÃO: Selecionar o PAI (o objeto inteiro) em vez de partes soltas
+                    // a menos que esteja no modo deep select
+                    let target = obj;
+                    if (!deepSelectMode) {
+                        while(target.parent !== objectsGroup && target.parent !== null) {
+                            target = target.parent;
+                        }
+                    }
+                    
+                    if(target.parent === objectsGroup || deepSelectMode) {
+                        parentSet.add(target);
+                    }
+                }
+            });
+
+            // Converter Set para Array
+            multiSelectedObjects = Array.from(parentSet);
+
+            multiSelectedObjects.forEach(obj => {
+                const helper = new THREE.BoxHelper(obj, 0xffff00);
+                scene.add(helper);
+                selectionHelpers.push(helper);
+            });
+
+            if (multiSelectedObjects.length > 0) {
+                showStatus(`${multiSelectedObjects.length} itens selecionados.`);
+                const btn = document.getElementById('btn-multi-delete');
+                btn.innerHTML = `<span class="material-icons">delete_sweep</span> DELETAR ${multiSelectedObjects.length} ITENS`;
+                btn.style.display = 'flex';
+            } else {
+                showStatus("Nenhum objeto na área.");
+            }
+        }
+
+        function clearMultiSelection() {
+            multiSelectedObjects = [];
+            selectionHelpers.forEach(h => scene.remove(h));
+            selectionHelpers = [];
+            document.getElementById('btn-multi-delete').style.display = 'none';
+        }
+
+        function deleteMultiSelected() {
+            if (multiSelectedObjects.length === 0) return;
+            
+            multiSelectedObjects.forEach(obj => {
+                // OTIMIZAÇÃO: Limpeza de memória ao deletar múltiplos
+                if (obj.parent) obj.parent.remove(obj);
+                 if(obj.traverse) {
+                    obj.traverse(child => {
+                        if(child.geometry) child.geometry.dispose();
+                        if(child.material) {
+                            if(Array.isArray(child.material)) child.material.forEach(m => m.dispose());
+                            else child.material.dispose();
+                        }
+                    });
+                }
+            });
+            
+            showStatus(`${multiSelectedObjects.length} itens removidos!`);
+            clearMultiSelection();
+            saveHistory();
+        }
+
         function selectObject(object) {
+            if (boxSelectMode) return; 
+
             selectedObject = object;
             transformControl.attach(object);
             transformControl.showY = !lockY;
@@ -1369,8 +1559,6 @@
                 const z = parseFloat(document.getElementById('inp-sz').value);
                 selectedObject.scale.set(x, y, z);
             }
-            // Não salvamos o histórico aqui pois o input dispara a cada digito, o 'onchange' é melhor, mas já temos o dragging.
-            // Para inputs manuais, o onchange já é o ideal.
             saveHistory();
         }
 
@@ -1416,7 +1604,6 @@
                 if(clone.material.map) automapUVs(clone, true);
             }
             
-            // Se duplicar um objeto travado, o clone deve nascer destravado para ser útil
             clone.userData.locked = false;
 
             selectedObject.parent.add(clone);
@@ -1431,7 +1618,20 @@
                 const el = document.getElementById(selectedObject.userData.listID);
                 if(el) el.remove();
             }
-            selectedObject.parent.remove(selectedObject);
+            
+            // OTIMIZAÇÃO: Limpeza de memória
+            const obj = selectedObject;
+            obj.parent.remove(obj);
+            if(obj.traverse) {
+                obj.traverse(child => {
+                    if(child.geometry) child.geometry.dispose();
+                    if(child.material) {
+                        if(Array.isArray(child.material)) child.material.forEach(m => m.dispose());
+                        else child.material.dispose();
+                    }
+                });
+            }
+
             deselect();
             showStatus("Objeto removido.");
             saveHistory();
@@ -1456,12 +1656,11 @@
                 return;
             }
             deselect();
+            clearMultiSelection(); // Limpa helpers antes de exportar
             
-            // MOSTRA O LOADING
             const loadingOverlay = document.getElementById('loading-overlay');
             loadingOverlay.style.display = 'flex';
 
-            // Pequeno delay para o navegador renderizar a tela de loading antes de travar no processo de exportação
             setTimeout(() => {
                 const exporter = new THREE.GLTFExporter();
                 exporter.parse(objectsGroup, function (result) {
@@ -1472,7 +1671,6 @@
                     a.download = 'cenario_3d.glb';
                     a.click();
                     
-                    // ESCONDE O LOADING
                     loadingOverlay.style.display = 'none';
                     showStatus("Exportado!");
                 }, { binary: true });
