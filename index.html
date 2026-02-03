@@ -184,6 +184,10 @@
         .geo-btn.snap-active { background: #e67e22; color: #fff; box-shadow: 0 0 10px rgba(230, 126, 34, 0.5); }
         .geo-btn.eraser-active { background: #e74c3c; color: white; box-shadow: 0 0 10px rgba(231, 76, 60, 0.5); }
         
+        /* NOVO: Estilo para botão de Precisão e Arco */
+        .geo-btn.precision-active { background: #9b59b6; color: white; box-shadow: 0 0 10px rgba(155, 89, 182, 0.5); }
+        .geo-btn.arc-active { background: #1abc9c; color: white; box-shadow: 0 0 10px rgba(26, 188, 156, 0.5); }
+
         /* Correção específica para o botão Ímã/Snap */
         #tool-snap {
             background-color: rgba(50, 50, 50, 0.8) !important;
@@ -255,6 +259,25 @@
             to { opacity: 1; transform: translateX(-50%) scale(1); }
         }
 
+        /* --- NOVO: MODAL DE INPUT DE DISTÂNCIA --- */
+        #length-input-modal {
+            position: absolute; top: 150px; left: 50%; transform: translateX(-50%);
+            background: #2a2a2a; padding: 15px; border-radius: 8px; border: 1px solid #D4AF37;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.6); z-index: 999; display: none;
+            display: none; flex-direction: column; gap: 10px; min-width: 250px;
+        }
+        #length-input-modal label { color: #D4AF37; font-weight: bold; font-size: 0.9rem; }
+        #length-input-value {
+            background: #111; border: 1px solid #555; color: white; padding: 8px;
+            border-radius: 4px; font-size: 1rem;
+        }
+        #length-input-value:focus { border-color: #D4AF37; outline: none; }
+        #length-confirm-btn {
+            background: #D4AF37; color: #000; border: none; padding: 10px;
+            font-weight: bold; border-radius: 4px; cursor: pointer;
+        }
+        #length-confirm-btn:hover { background: #e5c14f; }
+
         hr { border: 0; border-top: 1px solid #444; margin: 15px 0; }
         
         ::-webkit-scrollbar { width: 8px; }
@@ -268,6 +291,13 @@
     <div id="loading-overlay">
         <div class="loading-spinner"></div>
         <div class="loading-text" id="loading-msg">PROCESSANDO...</div>
+    </div>
+
+    <div id="length-input-modal" style="display:none;">
+        <label>Definir Comprimento (metros):</label>
+        <input type="number" id="length-input-value" step="0.1" placeholder="Ex: 1.5">
+        <button id="length-confirm-btn" onclick="submitLengthInput()">CONFIRMAR LINHA</button>
+        <button style="margin-top:5px; background:transparent; border:1px solid #555; color:#aaa; padding:5px; border-radius:4px; cursor:pointer;" onclick="closeLengthInput()">Cancelar</button>
     </div>
 
     <div id="selection-box"></div>
@@ -462,6 +492,14 @@
         <span class="material-icons">mode_edit</span>
     </button>
     
+    <button class="tool-btn geo-btn" id="tool-length-input" title="Linha com Medida (Régua)" onclick="toggleLengthMode()">
+        <span class="material-icons">straighten</span>
+    </button>
+
+    <button class="tool-btn geo-btn" id="tool-draw-arc" title="Desenhar Arco (3 Pontos)" onclick="toggleArcMode()">
+        <span class="material-icons">gesture</span>
+    </button>
+    
     <button class="tool-btn geo-btn" id="tool-eraser" title="Borracha (Apagar objeto individual)" onclick="toggleEraserMode()">
         <span class="material-icons" style="color: #e74c3c;">auto_delete</span>
     </button>
@@ -534,13 +572,20 @@
         // --- VARIÁVEIS DO NOVO MODO DE DESENHO (GIS) ---
         let drawMode = false;
         let snapMode = false;
-        let eraserMode = false; // NOVA VARIÁVEL
+        let eraserMode = false; 
         let drawingPoints = [];
         let drawingLines = []; // Array de linhas visuais
         let tempLine = null;   // Linha que segue o mouse
         let snapIndicator = null; // Esfera visual do snap
         let drawnPolygons = []; // Armazena os GeoJSONs criados
         
+        // --- NOVAS VARIÁVEIS PARA AS FERRAMENTAS PEDIDAS ---
+        let lengthInputMode = false;
+        let pendingLengthVector = null; // Direção para onde a linha vai crescer
+        let arcDrawMode = false;
+        let arcIntermediatePoint = null; // Ponto do meio do arco
+        let arcPreviewLine = null;
+
         init();
         initTextureSystem();
         initSnapSystem();
@@ -687,13 +732,81 @@
                 }
             } else {
                 btn.classList.remove('active');
-                // IMPORTANTE: Não chamamos cancelDrawing() aqui. Apenas removemos a linha temporária.
+                // Desativa as sub-ferramentas ao sair do modo desenho
+                if (lengthInputMode) toggleLengthMode();
+                if (arcDrawMode) toggleArcMode();
+                
                 if(tempLine) {
                     scene.remove(tempLine);
                     tempLine = null;
                 }
                 showStatus("Desenho PAUSADO. Mova a câmera e reative para continuar.");
             }
+        }
+
+        // --- NOVAS FUNÇÕES: MODO RÉGUA E ARCO ---
+        function toggleLengthMode() {
+            if (!drawMode) {
+                showStatus("Ative o MODO DE DESENHO (Lápis) primeiro!");
+                return;
+            }
+            lengthInputMode = !lengthInputMode;
+            
+            // Se ativar régua, desativa arco
+            if(lengthInputMode && arcDrawMode) toggleArcMode();
+
+            const btn = document.getElementById('tool-length-input');
+            if (lengthInputMode) {
+                btn.classList.add('precision-active');
+                showStatus("RÉGUA ATIVA: Aponte a direção, clique e digite o valor.");
+            } else {
+                btn.classList.remove('precision-active');
+                showStatus("Régua desativada. Voltando ao desenho livre.");
+            }
+        }
+
+        function toggleArcMode() {
+            if (!drawMode) {
+                showStatus("Ative o MODO DE DESENHO (Lápis) primeiro!");
+                return;
+            }
+            arcDrawMode = !arcDrawMode;
+            arcIntermediatePoint = null; // Reset
+            
+            // Se ativar arco, desativa régua
+            if(arcDrawMode && lengthInputMode) toggleLengthMode();
+
+            const btn = document.getElementById('tool-draw-arc');
+            if (arcDrawMode) {
+                btn.classList.add('arc-active');
+                showStatus("ARCO ATIVO: Clique no Meio da curva, depois no Fim.");
+            } else {
+                btn.classList.remove('arc-active');
+                // Limpa preview do arco se existir
+                if (arcPreviewLine) { scene.remove(arcPreviewLine); arcPreviewLine = null; }
+                showStatus("Arco desativado.");
+            }
+        }
+
+        function closeLengthInput() {
+            document.getElementById('length-input-modal').style.display = 'none';
+            pendingLengthVector = null;
+        }
+
+        function submitLengthInput() {
+            const val = parseFloat(document.getElementById('length-input-value').value);
+            if (isNaN(val) || val <= 0 || !pendingLengthVector || drawingPoints.length === 0) {
+                showStatus("Valor inválido.");
+                return;
+            }
+            
+            const lastPoint = drawingPoints[drawingPoints.length - 1];
+            // Calcula o novo ponto: PontoAnterior + (VetorDireção * Comprimento)
+            const newPoint = new THREE.Vector3().copy(lastPoint).add(pendingLengthVector.multiplyScalar(val));
+            
+            addDrawPoint(newPoint);
+            closeLengthInput();
+            showStatus(`Segmento de ${val}m criado!`);
         }
 
         function getMousePositionOnPlane(clientX, clientY) {
@@ -781,10 +894,48 @@
                 tempLine = null;
             }
 
-            const geometry = new THREE.BufferGeometry().setFromPoints([lastPoint, cursorPoint]);
-            const material = new THREE.LineBasicMaterial({ color: 0x3498db, transparent: true, opacity: 0.5, dashSize: 1, gapSize: 0.5 });
-            tempLine = new THREE.Line(geometry, material);
-            scene.add(tempLine);
+            // Preview diferente se for Modo Arco
+            if (arcDrawMode && arcIntermediatePoint) {
+                // Se já temos o ponto do meio, mostrar a curva completa até o mouse
+                const points = getCurvePoints(lastPoint, arcIntermediatePoint, cursorPoint);
+                const geometry = new THREE.BufferGeometry().setFromPoints(points);
+                const material = new THREE.LineBasicMaterial({ color: 0x1abc9c, transparent: true, opacity: 0.8 });
+                tempLine = new THREE.Line(geometry, material);
+                scene.add(tempLine);
+            } else {
+                // Preview Linha Reta Padrão
+                const geometry = new THREE.BufferGeometry().setFromPoints([lastPoint, cursorPoint]);
+                let color = 0x3498db;
+                if (lengthInputMode) color = 0x9b59b6; // Roxo se for régua
+                if (arcDrawMode) color = 0x1abc9c; // Verde água se for arco (primeira perna)
+
+                const material = new THREE.LineBasicMaterial({ color: color, transparent: true, opacity: 0.5, dashSize: 1, gapSize: 0.5 });
+                tempLine = new THREE.Line(geometry, material);
+                scene.add(tempLine);
+            }
+        }
+
+        // Função auxiliar para gerar pontos de um arco por 3 pontos (Circular Arc)
+        function getCurvePoints(p1, p2, p3, segments = 12) {
+            // Se os pontos forem muito próximos ou colineares, retorna linha reta
+            const points = [];
+            
+            // Método Bézier Quadrático Aproximado (Mais estável que círculo perfeito para UI)
+            // P1 = Inicio, P2 = Controle (Aprox), P3 = Fim.
+            // Para fazer a curva passar PELO P2, P2 precisa ser ajustado.
+            // Fórmula do Ponto no Tempo 0.5 de BezierQuad: B(0.5) = 0.25*P0 + 0.5*Pc + 0.25*P2
+            // Queremos que B(0.5) seja nosso p2 clicado.
+            // Então: UserP2 = 0.25*P1 + 0.5*ControlP + 0.25*P3
+            // 0.5*ControlP = UserP2 - 0.25*P1 - 0.25*P3
+            // ControlP = 2*UserP2 - 0.5*P1 - 0.5*P3
+            
+            const controlPoint = new THREE.Vector3()
+                .copy(p2).multiplyScalar(2)
+                .sub(p1.clone().multiplyScalar(0.5))
+                .sub(p3.clone().multiplyScalar(0.5));
+
+            const curve = new THREE.QuadraticBezierCurve3(p1, controlPoint, p3);
+            return curve.getPoints(segments);
         }
 
         function cancelDrawing() {
@@ -1552,60 +1703,84 @@
             saveHistory();
         }
 
-        function createExtrusionFromGhost(ghostMesh) {
-            const shape = ghostMesh.userData.originalShape;
-            
-            const extrudeSettings = {
-                steps: 1,
-                depth: 0.05, 
-                bevelEnabled: false
-            };
+        // Procure por esta função no seu código
+function createExtrusionFromGhost(ghostMesh) {
+    const shape = ghostMesh.userData.originalShape;
+    
+    const extrudeSettings = {
+        steps: 1,
+        depth: 0.05, 
+        bevelEnabled: false
+    };
 
-            const geometry = new THREE.ExtrudeGeometry(shape, extrudeSettings);
-            const material = new THREE.MeshStandardMaterial({ color: 0x999999, roughness: 0.8 });
-            
-            const mesh = new THREE.Mesh(geometry, material);
-            mesh.rotation.x = -Math.PI / 2; 
-            mesh.receiveShadow = true;
-            mesh.castShadow = true;
-            
-            mesh.userData.isExtruded = true;
-            mesh.userData.baseShape = shape; 
-            mesh.userData.currentHeight = 0.05;
-            
-            mesh.position.y = 0.05; 
+    const geometry = new THREE.ExtrudeGeometry(shape, extrudeSettings);
+    const material = new THREE.MeshStandardMaterial({ color: 0x999999, roughness: 0.8 });
+    
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.rotation.x = -Math.PI / 2; 
+    mesh.receiveShadow = true;
+    mesh.castShadow = true;
+    
+    mesh.userData.isExtruded = true;
+    mesh.userData.baseShape = shape; 
+    
+    // --- ADICIONE ESTA LINHA ABAIXO ---
+    // Salva os pontos brutos para resistir ao JSON/Undo/Redo
+    mesh.userData.shapePoints = shape.getPoints(); 
+    // ----------------------------------
 
-            objectsGroup.add(mesh);
-            selectObject(mesh);
-        }
+    mesh.userData.currentHeight = 0.05;
+    
+    mesh.position.y = 0.05; 
+
+    objectsGroup.add(mesh);
+    selectObject(mesh);
+}
 
         function updateExtrusionHeight() {
-            if (!selectedObject || !selectedObject.userData.isExtruded) return;
-            
-            const val = parseFloat(document.getElementById('inp-extrusion').value);
-            if (isNaN(val) || val < 0) return;
+    if (!selectedObject || !selectedObject.userData.isExtruded) return;
+    
+    const val = parseFloat(document.getElementById('inp-extrusion').value);
+    if (isNaN(val) || val < 0) return;
 
-            const shape = selectedObject.userData.baseShape;
-            
-            const newSettings = {
-                steps: 1,
-                depth: val,
-                bevelEnabled: false
-            };
-            
-            const newGeom = new THREE.ExtrudeGeometry(shape, newSettings);
-            const currentMat = selectedObject.material;
-            
-            selectedObject.geometry.dispose();
-            selectedObject.geometry = newGeom;
-            selectedObject.userData.currentHeight = val;
-            
-            if(currentMat.map) {
-                automapUVs(selectedObject, true);
-                currentMat.needsUpdate = true;
-            }
-            saveHistory();
-        }
+    // --- CÓDIGO CORRIGIDO ---
+    let shape = selectedObject.userData.baseShape;
+
+    // Se temos os pontos salvos, recriamos o Shape do zero.
+    // Isso conserta o erro "t.extractPoints is not a function"
+    if (selectedObject.userData.shapePoints) {
+        const points = selectedObject.userData.shapePoints.map(p => new THREE.Vector2(p.x, p.y));
+        shape = new THREE.Shape(points);
+    } 
+    // Fallback de segurança: se o shape atual não tiver a função necessária e não tivermos pontos, aborta para não travar
+    else if (!shape || typeof shape.extractPoints !== 'function') {
+        console.warn("Shape corrompido pelo histórico. Recrie o objeto.");
+        return;
+    }
+    // ------------------------
+    
+    const newSettings = {
+        steps: 1,
+        depth: val,
+        bevelEnabled: false
+    };
+    
+    const newGeom = new THREE.ExtrudeGeometry(shape, newSettings);
+    const currentMat = selectedObject.material;
+    
+    selectedObject.geometry.dispose();
+    selectedObject.geometry = newGeom;
+    selectedObject.userData.currentHeight = val;
+    
+    // Atualiza referência do baseShape para o novo (válido)
+    selectedObject.userData.baseShape = shape;
+
+    if(currentMat.map) {
+        automapUVs(selectedObject, true);
+        currentMat.needsUpdate = true;
+    }
+    saveHistory();
+}
 
         function findCenterRecursive(obj) {
             if (Array.isArray(obj)) {
@@ -1786,17 +1961,57 @@
         }
 
         function onPointerDown(event) {
-            if (event.target.closest('.tool-btn') || event.target.closest('#sidebar') || event.target.closest('#menu-toggle') || event.target.closest('#btn-confirm-creation') || event.target.closest('#btn-multi-delete') || event.target.closest('#btn-finish-poly')) return;
+            if (event.target.closest('.tool-btn') || event.target.closest('#sidebar') || event.target.closest('#menu-toggle') || event.target.closest('#btn-confirm-creation') || event.target.closest('#btn-multi-delete') || event.target.closest('#btn-finish-poly') || event.target.closest('#length-input-modal')) return;
 
             const rect = renderer.domElement.getBoundingClientRect();
             mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
             mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
 
-            // MODO DE DESENHO (NOVO)
+            // MODO DE DESENHO
             if(drawMode) {
                 const rawPos = getMousePositionOnPlane(event.clientX, event.clientY);
                 if(rawPos) {
                     const finalPos = findSnapPoint(rawPos); 
+
+                    // 1. Lógica do Modo de Medida Exata (Régua)
+                    if (lengthInputMode && drawingPoints.length > 0) {
+                        const last = drawingPoints[drawingPoints.length-1];
+                        const dir = new THREE.Vector3().subVectors(finalPos, last).normalize();
+                        
+                        // Salva o vetor direção e abre o modal
+                        pendingLengthVector = dir;
+                        const modal = document.getElementById('length-input-modal');
+                        modal.style.display = 'flex';
+                        modal.style.left = event.clientX + 'px';
+                        modal.style.top = event.clientY + 'px';
+                        document.getElementById('length-input-value').focus();
+                        return; // Interrompe para esperar o input
+                    }
+
+                    // 2. Lógica do Modo Arco
+                    if (arcDrawMode && drawingPoints.length > 0) {
+                        if (!arcIntermediatePoint) {
+                            // Primeiro clique: define o ponto do meio da curva
+                            arcIntermediatePoint = finalPos.clone();
+                            showStatus("Meio da curva definido. Clique no FIM.");
+                        } else {
+                            // Segundo clique: define o fim e gera a curva
+                            const last = drawingPoints[drawingPoints.length-1];
+                            const curvePoints = getCurvePoints(last, arcIntermediatePoint, finalPos);
+                            
+                            // Adiciona todos os pontos da curva ao array de desenho
+                            // Ignora o primeiro porque já é o 'last'
+                            for(let i=1; i<curvePoints.length; i++) {
+                                addDrawPoint(curvePoints[i]);
+                            }
+                            
+                            arcIntermediatePoint = null; // Reseta para próxima curva
+                            if (arcPreviewLine) { scene.remove(arcPreviewLine); arcPreviewLine = null; }
+                            showStatus("Arco criado! Continue ou feche.");
+                        }
+                        return;
+                    }
+
                     addDrawPoint(finalPos);
                 }
                 return;
@@ -1804,62 +2019,43 @@
 
             raycaster.setFromCamera(mouse, camera);
 
-            // MODO BORRACHA (NOVO)
+            // MODO BORRACHA
             if(eraserMode) {
-                // Raycast em tudo no grupo de objetos
                 const intersects = raycaster.intersectObjects(objectsGroup.children, true);
                 
                 if(intersects.length > 0) {
-                    // Procura o objeto pai principal ou o próprio objeto se for um polígono desenhado
                     let target = intersects[0].object;
-                    
-                    // Verifica se é um polígono desenhado
                     while(target.parent !== objectsGroup && target.parent !== null) {
                         target = target.parent;
                     }
-
-                    // Se for polígono desenhado (tem isDrawn ou ghostUuid)
                     if(target.userData.isDrawn || target.userData.ghostUuid) {
-                        // Remove visual
                         objectsGroup.remove(target);
                         if(target.geometry) target.geometry.dispose();
-
-                        // Remove fantasma associado se existir
                         if(target.userData.ghostUuid) {
                             const ghost = geoJsonGhostGroup.children.find(g => g.uuid === target.userData.ghostUuid);
                             if(ghost) geoJsonGhostGroup.remove(ghost);
                         }
-
-                        // Remove da lista lógica
                         drawnPolygons = drawnPolygons.filter(p => p.uuid !== target.uuid);
                         showStatus("Polígono apagado.");
                         saveHistory();
                         return;
                     }
-                    
-                    // Se for linha de GeoJSON importado
-                    if(target.name === "Mapa Importado (GeoJSON)") {
-                        // Para grupos inteiros, talvez seja arriscado, mas vamos permitir deletar o grupo
-                        // Ou deletar linhas individuais se o usuário clicar na linha
-                         const hit = intersects[0].object;
-                         if(hit.parent.name === "Mapa Importado (GeoJSON)") {
-                             hit.parent.remove(hit);
-                             hit.geometry.dispose();
-                             showStatus("Linha do mapa apagada.");
-                             saveHistory();
-                             return;
-                         }
-                    }
+                     const hit = intersects[0].object;
+                     if(hit.parent.name === "Mapa Importado (GeoJSON)") {
+                         hit.parent.remove(hit);
+                         hit.geometry.dispose();
+                         showStatus("Linha do mapa apagada.");
+                         saveHistory();
+                         return;
+                     }
                 }
                 return;
             }
 
-            // Se for modo Box Select
             if (boxSelectMode) {
                 isBoxSelecting = true;
                 boxStartPoint.x = event.clientX;
                 boxStartPoint.y = event.clientY;
-                
                 boxSelectionDiv.style.left = event.clientX + 'px';
                 boxSelectionDiv.style.top = event.clientY + 'px';
                 boxSelectionDiv.style.width = '0px';
@@ -1868,15 +2064,12 @@
                 return;
             }
 
-            // MODO MÁGICO
             if (magicMode) {
                 const ghostIntersects = raycaster.intersectObjects(geoJsonGhostGroup.children, true);
-                
                 if (ghostIntersects.length > 0) {
                     ghostIntersects.sort((a, b) => {
                         return (a.object.userData.area || 999999) - (b.object.userData.area || 999999);
                     });
-
                     const smallestObj = ghostIntersects[0].object;
                     previewSelection(smallestObj);
                     return;
@@ -1888,7 +2081,6 @@
 
             // SELEÇÃO PADRÃO
             const intersects = raycaster.intersectObjects(objectsGroup.children, true);
-
             if (intersects.length > 0) {
                 let target = null;
                 for (let i = 0; i < intersects.length; i++) {
@@ -1963,9 +2155,7 @@
 
         function performBoxSelection() {
             clearMultiSelection();
-            
             const rect = boxSelectionDiv.getBoundingClientRect();
-            
             if (rect.width < 5 || rect.height < 5) return;
 
             const frustum = new THREE.Frustum();
@@ -2002,7 +2192,6 @@
                             target = target.parent;
                         }
                     }
-                    
                     if(target.parent === objectsGroup || deepSelectMode) {
                         parentSet.add(target);
                     }
@@ -2137,25 +2326,30 @@
         }
 
         function duplicateSelected() {
-            if (!selectedObject) return;
-            const clone = selectedObject.clone();
-            clone.position.x += 2; 
-            
-            if (selectedObject.userData.isExtruded) {
-                clone.userData.isExtruded = true;
-                clone.userData.baseShape = selectedObject.userData.baseShape;
-                clone.userData.currentHeight = selectedObject.userData.currentHeight;
-                clone.geometry = selectedObject.geometry.clone(); 
-                if(clone.material.map) automapUVs(clone, true);
-            }
-            
-            clone.userData.locked = false;
+    if (!selectedObject) return;
+    const clone = selectedObject.clone();
+    clone.position.x += 2; 
+    
+    if (selectedObject.userData.isExtruded) {
+        clone.userData.isExtruded = true;
+        clone.userData.baseShape = selectedObject.userData.baseShape;
+        
+        // --- ADICIONE ESTA LINHA ---
+        clone.userData.shapePoints = selectedObject.userData.shapePoints;
+        // ---------------------------
 
-            selectedObject.parent.add(clone);
-            selectObject(clone);
-            showStatus("Objeto duplicado!");
-            saveHistory();
-        }
+        clone.userData.currentHeight = selectedObject.userData.currentHeight;
+        clone.geometry = selectedObject.geometry.clone(); 
+        if(clone.material.map) automapUVs(clone, true);
+    }
+    
+    clone.userData.locked = false;
+
+    selectedObject.parent.add(clone);
+    selectObject(clone);
+    showStatus("Objeto duplicado!");
+    saveHistory();
+}
 
         function deleteSelected() {
             if (!selectedObject) return;
@@ -2182,7 +2376,12 @@
         }
 
         function onKeyDown(event) {
-            if (event.target.tagName === 'INPUT') return;
+            if (event.target.tagName === 'INPUT') {
+                if(event.key === 'Enter' && event.target.id === 'length-input-value') {
+                    submitLengthInput();
+                }
+                return;
+            }
             const key = event.key.toLowerCase();
             if (key === "delete") deleteSelected();
             if (event.ctrlKey && key === "d") { event.preventDefault(); duplicateSelected(); }
@@ -2357,6 +2556,12 @@
             
             if (drawingPoints.length < 3) {
                 document.getElementById('btn-finish-poly').style.display = 'none';
+            }
+
+            // Se estava no meio de um arco, cancela o arco
+            if (arcIntermediatePoint) {
+                arcIntermediatePoint = null;
+                if(arcPreviewLine) scene.remove(arcPreviewLine);
             }
 
             showStatus("Ponto removido.");
